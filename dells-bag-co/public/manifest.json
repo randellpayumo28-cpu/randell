@@ -1,0 +1,22 @@
+{
+    "name": "Dells Bag Co.",
+    "short_name": "Dells Bag Co.",
+    "start_url": "/",
+    "background_color": "#0D6EFD",
+    "theme_color": "#0A2472",
+    "display": "standalone",
+    "icons": [
+        {
+            "src": "/image/192x192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "/image/512x512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ]
+}
+
+
