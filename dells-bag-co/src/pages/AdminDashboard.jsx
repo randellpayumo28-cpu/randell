@@ -26,7 +26,7 @@ export default function AdminDashboard() {
       .then(r => r.json())
       .then(data => {
         if (!Array.isArray(data)) {
-          throw new Error('Expected an array from /api/products but got: ' + JSON.stringify(data))
+          throw new Error('Expected an array from https://randell.onrender.com/api/product but got: ' + JSON.stringify(data))
         }
         setProducts(data)
       })
