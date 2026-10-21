@@ -3,6 +3,7 @@ const cors = require('cors')
 const multer = require('multer')
 const path = require('path')
 const fs = require('fs')
+const PORT = process.env.PORT || 8080
 
 const app = express()
 
@@ -157,6 +158,6 @@ app.use((err, req, res, next) => {
     res.status(400).json({ message: err.message || 'Something went wrong' })
 })
 
-app.listen(8080, () => {
-    console.log('Server running on port 8080')
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`)
 })
