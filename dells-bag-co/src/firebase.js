@@ -16,6 +16,13 @@ const app = initializeApp(firebaseConfig)
 
 export const auth = getAuth(app)
 export const googleProvider = new GoogleAuthProvider()
+
+// Always show Google's account chooser instead of silently reusing
+// the previously selected Google account.
+googleProvider.setCustomParameters({
+  prompt: 'select_account',
+})
+
 export const db = getFirestore(app)
 
 export default app
