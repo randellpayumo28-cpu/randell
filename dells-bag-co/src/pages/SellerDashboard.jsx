@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { addDoc, collection, deleteDoc, doc, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore'
+import { addDoc, collection, deleteDoc, doc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore'
 import { useAuth } from '../context/AuthContext.jsx'
 import { db } from '../firebase.js'
 import { fileToCompressedDataUrl } from '../services/imageUpload.js'
+import { PRODUCTS as SHOP_FALLBACK_PRODUCTS } from '../data/products.js'
 
 const categories = ['Backpack', 'Handbag', 'Tote Bag', 'Sling Bag', 'Travel Bag', 'Wallet']
 const blank = { product: '', category: 'Backpack', buy: '', sell: '', stock: '', image: null, currentImage: '' }
@@ -24,14 +25,19 @@ export default function SellerDashboard() {
   useEffect(() => {
     if (!currentUser?.uid) { setItems([]); setLoading(false); return }
     setLoading(true)
-    const q = query(collection(db, 'products'), where('sellerId', '==', currentUser.uid))
-    return onSnapshot(q, (snap) => {
+    return onSnapshot(collection(db, 'products'), (snap) => {
       const rows = snap.docs.map((d) => {
         const p = d.data()
         return { id: d.id, ...p, product: p.product || p.name || '', sell: p.sell ?? p.price ?? 0, image: p.image || p.img || '' }
       })
-      rows.sort((a, b) => a.product.localeCompare(b.product))
-      setItems(rows); setError(''); setLoading(false)
+      // Shop displays these Firestore documents to customers. Show the same catalog here,
+      // including older products that were saved before sellerId was added.
+      const visibleRows = rows.length ? rows : SHOP_FALLBACK_PRODUCTS.map((p) => ({
+        ...p, id: p.id, product: p.name, sell: p.price, image: p.img, stock: p.stock ?? 0,
+        buy: p.buy ?? 0, isShopFallback: true,
+      }))
+      visibleRows.sort((a, b) => a.product.localeCompare(b.product))
+      setItems(visibleRows); setError(''); setLoading(false)
     }, (e) => {
       console.error('Seller products Firestore error:', e)
       setError(e.code === 'permission-denied' ? 'Firebase access denied. Check the seller account and Firestore security rules.' : e.message || 'Could not load products from Firebase.')
@@ -69,12 +75,14 @@ export default function SellerDashboard() {
   }
 
   function startEdit(p) {
+    if (p.isShopFallback || p.sellerId !== currentUser?.uid) return
     setEditing(p.id)
     setForm({ product: p.product, category: p.category || 'Backpack', buy: p.buy ?? '', sell: p.sell ?? p.price ?? '', stock: p.stock ?? 0, image: null, currentImage: p.image || p.img || '' })
     setModal('edit'); setError(''); setNotice('')
   }
 
   async function remove(p) {
+    if (p.isShopFallback || p.sellerId !== currentUser?.uid) return
     if (!window.confirm('Delete ' + p.product + '?')) return
     try { await deleteDoc(doc(db, 'products', p.id)); setNotice('Product deleted.'); setError('') }
     catch (e) { setError(e.message || 'Could not delete product.') }
@@ -94,9 +102,9 @@ export default function SellerDashboard() {
         {[['Products', items.length], ['Total stock', totalStock], ['Stock value', peso(totalValue)]].map(([label, value]) => <div className="col-md-4" key={label}><div className="card border-0 shadow-sm"><div className="card-body p-4"><div className="text-uppercase small text-muted">{label}</div><h2 className="display-6 fw-bold mb-0">{value}</h2></div></div></div>)}
       </div>
       <section className="card border-0 shadow-sm"><div className="card-body p-4">
-        <div className="d-flex justify-content-between align-items-center mb-3"><div><h2 className="h5 mb-1">My bags</h2><p className="small text-muted mb-0">Bags in your inventory.</p></div><button className="btn btn-dark btn-sm" onClick={() => { setEditing(null); setForm(blank); setModal('add'); setError('') }}>+ Add Product</button></div>
+        <div className="d-flex justify-content-between align-items-center mb-3"><div><h2 className="h5 mb-1">My bags</h2><p className="small text-muted mb-0">Products currently displayed in the Shop. You can edit or delete products assigned to your seller account.</p></div><button className="btn btn-dark btn-sm" onClick={() => { setEditing(null); setForm(blank); setModal('add'); setError('') }}>+ Add Product</button></div>
         <div className="table-responsive"><table className="table table-hover align-middle"><thead><tr><th>ID</th><th>Image</th><th>Product</th><th>Category</th><th>Buy</th><th>Sell</th><th>Stock</th><th>Actions</th></tr></thead><tbody>
-          {loading ? <tr><td colSpan="8" className="text-center py-4">Loading products from Firebase...</td></tr> : items.length ? items.map((p) => <tr key={p.id}><td>{p.id.slice(0, 8)}</td><td>{p.image ? <img src={p.image} alt={p.product} style={{ width: 48, height: 48, objectFit: 'cover' }} /> : '—'}</td><td>{p.product}</td><td>{p.category}</td><td>{peso(p.buy)}</td><td>{peso(p.sell)}</td><td>{p.stock}</td><td><button className="btn btn-sm btn-outline-primary me-1" onClick={() => startEdit(p)}>Edit</button><button className="btn btn-sm btn-outline-danger" onClick={() => remove(p)}>Delete</button></td></tr>) : <tr><td colSpan="8" className="text-center py-4">No products yet. Tap Add Product to start.</td></tr>}
+          {loading ? <tr><td colSpan="8" className="text-center py-4">Loading Shop products from Firebase...</td></tr> : items.length ? items.map((p) => <tr key={p.id}><td>{p.id.slice(0, 8)}</td><td>{p.image ? <img src={p.image} alt={p.product} style={{ width: 48, height: 48, objectFit: 'cover' }} /> : '—'}</td><td>{p.product}</td><td>{p.category}</td><td>{peso(p.buy)}</td><td>{peso(p.sell)}</td><td>{p.stock}</td><td>{p.isShopFallback ? <span className="text-muted small">Shop sample</span> : p.sellerId === currentUser?.uid ? <><button className="btn btn-sm btn-outline-primary me-1" onClick={() => startEdit(p)}>Edit</button><button className="btn btn-sm btn-outline-danger" onClick={() => remove(p)}>Delete</button></> : <span className="text-muted small">Managed by shop/admin</span>}</td></tr>) : <tr><td colSpan="8" className="text-center py-4">No products yet. Tap Add Product to start.</td></tr>}
         </tbody></table></div>
       </div></section>
     </main>
