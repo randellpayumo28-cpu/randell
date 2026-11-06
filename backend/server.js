@@ -349,6 +349,95 @@ async function ensureProductImageColumn() {
   await db.query('UPDATE products SET is_deleted = 0 WHERE is_deleted IS NULL')
 }
 
+// Signed-in customer order endpoints. Customers can only read/cancel their own orders.
+app.get('/api/orders/mine', requireUser, async (req, res) => {
+  try {
+    const [orders] = await db.query('SELECT * FROM orders WHERE firebase_uid = ? ORDER BY placed_at DESC', [req.authUid])
+    const result = []
+    for (const order of orders) {
+      const [items] = await db.query('SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?', [order.order_id])
+      result.push(orderResponse(order, items))
+    }
+    res.json(result)
+  } catch (error) {
+    console.error('Load customer orders failed:', error)
+    res.status(500).json({ message: 'Could not load your orders.' })
+  }
+})
+
+app.post('/api/orders', requireUser, async (req, res) => {
+  const connection = await db.getConnection()
+  try {
+    const body = req.body || {}
+    const buyer = body.buyer || {}
+    const requestedItems = Array.isArray(body.items) ? body.items : []
+    if (!requestedItems.length || !buyer.name || !buyer.address || !buyer.contactNumber) {
+      return res.status(400).json({ message: 'Order items and complete buyer information are required.' })
+    }
+    await connection.beginTransaction()
+    const normalized = []
+    let total = 0
+    for (const item of requestedItems) {
+      const productId = Number(item.id ?? item.product_id)
+      const quantity = Math.floor(Number(item.qty ?? item.quantity))
+      if (!Number.isSafeInteger(productId) || productId < 1 || !Number.isSafeInteger(quantity) || quantity < 1) throw new Error('An order item has an invalid product or quantity.')
+      const [products] = await connection.query('SELECT product_id, product_name, image, image_path, sell_price, stock, seller_id FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE', [productId])
+      if (!products.length) throw new Error('A product in your cart is no longer available.')
+      const product = products[0]
+      if (Number(product.stock) < quantity) throw new Error(product.product_name + ' does not have enough stock.')
+      const price = Number(product.sell_price || 0)
+      total += price * quantity
+      normalized.push({ ...product, quantity, price })
+    }
+    const orderKey = 'ord_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9)
+    const [orderResult] = await connection.query(
+      'INSERT INTO orders (firebase_order_id, firebase_uid, customer_name, customer_email, buyer_name, buyer_address, buyer_contact, payment_method, total, status, placed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())',
+      [orderKey, req.authUid, req.authUser.name || buyer.name, req.authUser.email || null, buyer.name, buyer.address, buyer.contactNumber, body.paymentMethod || 'COD', total, 'To Ship']
+    )
+    for (const item of normalized) {
+      await connection.query('INSERT INTO order_items (order_id, product_id, product_name, image, unit_price, quantity, seller_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [orderResult.insertId, item.product_id, item.product_name, item.image || item.image_path || '', item.price, item.quantity, item.seller_id || null])
+      await connection.query('UPDATE products SET stock = stock - ? WHERE product_id = ?', [item.quantity, item.product_id])
+    }
+    await connection.commit()
+    const [rows] = await db.query('SELECT * FROM orders WHERE order_id = ?', [orderResult.insertId])
+    const [savedItems] = await db.query('SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?', [orderResult.insertId])
+    res.status(201).json(orderResponse(rows[0], savedItems))
+  } catch (error) {
+    await connection.rollback()
+    console.error('Create customer order failed:', error)
+    res.status(400).json({ message: error.message || 'Could not place order.' })
+  } finally {
+    connection.release()
+  }
+})
+
+app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
+  const connection = await db.getConnection()
+  try {
+    await connection.beginTransaction()
+    const [orders] = await connection.query("SELECT * FROM orders WHERE (firebase_order_id = ? OR order_id = ?) AND firebase_uid = ? LIMIT 1 FOR UPDATE", [req.params.id, req.params.id, req.authUid])
+    if (!orders.length) {
+      await connection.rollback()
+      return res.status(404).json({ message: 'Order not found.' })
+    }
+    if (['Cancelled', 'Shipped', 'Delivered'].includes(orders[0].status)) {
+      await connection.rollback()
+      return res.status(400).json({ message: 'This order can no longer be cancelled.' })
+    }
+    const [items] = await connection.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orders[0].order_id])
+    for (const item of items) if (item.product_id) await connection.query('UPDATE products SET stock = stock + ? WHERE product_id = ?', [item.quantity, item.product_id])
+    await connection.query("UPDATE orders SET status = 'Cancelled', cancel_reason = ? WHERE order_id = ?", [String(req.body?.reason || '').slice(0, 2000), orders[0].order_id])
+    await connection.commit()
+    res.json({ message: 'Order cancelled and stock restored.' })
+  } catch (error) {
+    await connection.rollback()
+    console.error('Cancel customer order failed:', error)
+    res.status(500).json({ message: 'Could not cancel order.' })
+  } finally {
+    connection.release()
+  }
+})
+
 // Protect admin-only user and order management endpoints below this line.
 app.use('/api', requireAdmin)
 
