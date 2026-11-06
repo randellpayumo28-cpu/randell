@@ -59,8 +59,8 @@ function Dashboard() {
                 type="button"
                 className="btn btn-outline-secondary btn-sm rounded-circle"
                 onClick={() => navigate('/seller-dashboard')}
-                aria-label="Switch to seller dashboard"
-                title="Switch to seller"
+                aria-label="Open my selling dashboard"
+                title="Sell your products"
               >
                 <i className="bi bi-shop-window"></i>
               </button>

@@ -204,7 +204,7 @@ async function requireUser(req, res, next) {
       "INSERT INTO users (firebase_uid, name, email, role) VALUES (?, ?, ?, 'user') ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email)",
       [decoded.uid, name, decoded.email || null]
     )
-    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role FROM users WHERE firebase_uid = ? LIMIT 1', [decoded.uid])
+    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role, username, photo_url, phone, address FROM users WHERE firebase_uid = ? LIMIT 1', [decoded.uid])
     if (!rows.length) return res.status(403).json({ message: 'Account profile was not found in MySQL.' })
     req.authUser = rows[0]
     req.authUid = decoded.uid
@@ -216,17 +216,7 @@ async function requireUser(req, res, next) {
   }
 }
 
-// Only admin accounts may create, edit, or delete catalog products.
-function requireAdminRole(req, res, next) {
-  const role = String(req.authUser?.role || '').trim().toLowerCase()
-  if (role !== 'admin') {
-    return res.status(403).json({
-      message: 'Admin access is required. Regular user accounts cannot manage products.'
-    })
-  }
-  req.isAdmin = true
-  next()
-}
+// Product write routes enforce ownership: users manage their own listings; admins manage all listings.
 
 // Return the authoritative account role from MySQL after Firebase verifies identity.
 // This endpoint also creates a missing profile with role='user'.
@@ -236,7 +226,11 @@ app.get('/api/auth/me', requireUser, (req, res) => {
     uid: req.authUser.firebase_uid,
     name: req.authUser.name,
     email: req.authUser.email,
-    role: String(req.authUser.role || 'user').trim().toLowerCase()
+    role: String(req.authUser.role || 'user').trim().toLowerCase(),
+    username: req.authUser.username || '',
+    photoURL: req.authUser.photo_url || null,
+    phone: req.authUser.phone || '',
+    address: req.authUser.address || ''
   })
 })
 
@@ -254,8 +248,8 @@ async function getPublicProducts(req, res) {
 }
 app.get(['/api/products', '/api/product'], getPublicProducts)
 
-// Product write operations are restricted to admin accounts only.
-app.post(['/api/products', '/api/product'], requireUser, requireAdminRole, upload.single('image'), async (req, res) => {
+// Signed-in users can list and manage their own products; admins can manage every product.
+app.post(['/api/products', '/api/product'], requireUser, upload.single('image'), async (req, res) => {
   try {
     const b = req.body || {}
     const name = String(b.name || b.product || '').trim()
@@ -272,18 +266,18 @@ app.post(['/api/products', '/api/product'], requireUser, requireAdminRole, uploa
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [result.insertId])
     res.status(201).json(productResponse(rows[0]))
   } catch (error) {
-    console.error('Admin create product failed:', error)
+    console.error('Create product failed:', error)
     if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not save product to MySQL.' })
   }
 })
 
-app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole, upload.single('image'), async (req, res) => {
+app.put(['/api/products/:id', '/api/product/:id'], requireUser, upload.single('image'), async (req, res) => {
   try {
-    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
+    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 AND (? = 1 OR seller_id = ?) LIMIT 1', [req.params.id, req.isAdmin ? 1 : 0, req.authUid])
     if (!found.length) {
       if (req.file) removeImageFile(req.file.filename)
-      return res.status(404).json({ message: 'Product not found.' })
+      return res.status(404).json({ message: 'Product not found or you do not own this product.' })
     }
     const old = found[0]
     const b = req.body || {}
@@ -302,31 +296,56 @@ app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [req.params.id])
     res.json(productResponse(rows[0]))
   } catch (error) {
-    console.error('Admin update product failed:', error)
+    console.error('Update product failed:', error)
     if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not update product in MySQL.' })
   }
 })
 
-app.delete(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole, async (req, res) => {
+app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
   try {
-    const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
+    const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 AND (? = 1 OR seller_id = ?) LIMIT 1', [req.params.id, req.isAdmin ? 1 : 0, req.authUid])
     if (!found.length) return res.status(404).json({ message: 'Product not found.' })
     await db.query('UPDATE products SET is_deleted = 1 WHERE product_id = ?', [req.params.id])
     if (String(found[0].image || '').startsWith('/uploads/')) removeImageFile(found[0].image)
     res.json({ message: 'Product deleted successfully.' })
   } catch (error) {
-    console.error('Admin delete product failed:', error)
+    console.error('Delete product failed:', error)
     res.status(500).json({ message: 'Could not delete product from MySQL.' })
   }
 })
 
 // Safe additive compatibility for older phpMyAdmin product tables.
+async function ensureUserCompatibility() {
+  const [columns] = await db.query('SHOW COLUMNS FROM users')
+  const existing = new Set(columns.map(column => column.Field))
+  const additions = [
+    ['username', 'ALTER TABLE users ADD COLUMN username VARCHAR(100) NULL'],
+    ['photo_url', 'ALTER TABLE users ADD COLUMN photo_url TEXT NULL'],
+    ['phone', 'ALTER TABLE users ADD COLUMN phone VARCHAR(40) NULL'],
+    ['address', 'ALTER TABLE users ADD COLUMN address TEXT NULL']
+  ]
+  for (const [field, sql] of additions) if (!existing.has(field)) {
+    await db.query(sql)
+    console.log('Added missing users.' + field + ' column')
+  }
+
+  // Keep the role model limited to user/admin; normalize any legacy seller value.
+  const [roleColumns] = await db.query("SHOW COLUMNS FROM users LIKE 'role'")
+  if (roleColumns.length) {
+    await db.query("UPDATE users SET role = 'user' WHERE LOWER(role) = 'seller'")
+    if (String(roleColumns[0].Type).toLowerCase().includes('seller')) {
+      await db.query("ALTER TABLE users MODIFY role ENUM('user', 'admin') NOT NULL DEFAULT 'user'")
+    }
+  }
+}
+
 // Existing product rows and values are retained; only missing support columns are added.
 async function ensureProductImageColumn() {
   const [columns] = await db.query('SHOW COLUMNS FROM products')
   const existing = new Set(columns.map(column => column.Field))
   const additions = [
+    ['image_path', 'ALTER TABLE products ADD COLUMN image_path VARCHAR(255) NULL'],
     ['material', 'ALTER TABLE products ADD COLUMN material VARCHAR(150) NULL'],
     ['image', 'ALTER TABLE products ADD COLUMN image MEDIUMTEXT NULL'],
     ['badge', 'ALTER TABLE products ADD COLUMN badge VARCHAR(80) NULL'],
@@ -340,7 +359,9 @@ async function ensureProductImageColumn() {
       console.log(`Added missing products.${field} column`)
     }
   }
-  await db.query("UPDATE products SET image = image_path WHERE (image IS NULL OR image = '') AND image_path IS NOT NULL AND image_path <> ''")
+  if (existing.has('image_path')) {
+    await db.query("UPDATE products SET image = image_path WHERE (image IS NULL OR image = '') AND image_path IS NOT NULL AND image_path <> ''")
+  }
   const [imageColumn] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
   if (imageColumn.length && !/mediumtext|longtext/i.test(String(imageColumn[0].Type))) {
     await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
@@ -349,7 +370,130 @@ async function ensureProductImageColumn() {
   await db.query('UPDATE products SET is_deleted = 0 WHERE is_deleted IS NULL')
 }
 
-// Protect admin-only management endpoints below this line.
+// Categories are shared reference data for product listings and admin forms.
+async function ensureCategoryTable() {
+  await db.query("CREATE TABLE IF NOT EXISTS categories (category_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, category_name VARCHAR(100) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (category_id), UNIQUE KEY uq_categories_name (category_name)) ENGINE=InnoDB")
+  await db.query("INSERT IGNORE INTO categories (category_name) VALUES ('Backpack'), ('Handbag'), ('Tote Bag'), ('Sling Bag'), ('Travel Bag'), ('Wallet')")
+}
+
+// Create missing order tables without changing existing users or products.
+async function ensureOrderTables() {
+  await db.query("CREATE TABLE IF NOT EXISTS orders (order_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, firebase_order_id VARCHAR(191) NULL, firebase_uid VARCHAR(128) NULL, customer_name VARCHAR(150) NULL, customer_email VARCHAR(191) NULL, buyer_name VARCHAR(150) NULL, buyer_address TEXT NULL, buyer_contact VARCHAR(40) NULL, payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', total DECIMAL(12,2) NOT NULL DEFAULT 0.00, status VARCHAR(40) NOT NULL DEFAULT 'To Ship', cancel_reason TEXT NULL, placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (order_id), UNIQUE KEY uq_orders_firebase_id (firebase_order_id), KEY idx_orders_user (firebase_uid), KEY idx_orders_status (status)) ENGINE=InnoDB")
+  await db.query("CREATE TABLE IF NOT EXISTS order_items (order_item_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, order_id BIGINT UNSIGNED NOT NULL, product_id INT(11) NULL, product_name VARCHAR(191) NOT NULL, image TEXT NULL, unit_price DECIMAL(12,2) NOT NULL DEFAULT 0.00, quantity INT UNSIGNED NOT NULL DEFAULT 1, seller_id VARCHAR(128) NULL, PRIMARY KEY (order_item_id), KEY idx_order_items_order (order_id), KEY idx_order_items_product (product_id), CONSTRAINT fk_order_items_order FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE, CONSTRAINT fk_order_items_product FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE SET NULL) ENGINE=InnoDB")
+  await db.query("CREATE TABLE IF NOT EXISTS cart_items (cart_item_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, firebase_uid VARCHAR(128) NOT NULL, product_id INT(11) NOT NULL, quantity INT UNSIGNED NOT NULL DEFAULT 1, selected TINYINT(1) NOT NULL DEFAULT 1, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (cart_item_id), UNIQUE KEY uq_cart_user_product (firebase_uid, product_id), CONSTRAINT fk_cart_product FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE CASCADE) ENGINE=InnoDB")
+  await db.query("CREATE TABLE IF NOT EXISTS notifications (notification_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, seller_id VARCHAR(128) NOT NULL, order_id VARCHAR(191) NOT NULL, buyer_name VARCHAR(150) NULL, buyer_address TEXT NULL, buyer_contact VARCHAR(40) NULL, payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', status VARCHAR(40) NOT NULL DEFAULT 'To Ship', items_json LONGTEXT NULL, placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, is_read TINYINT(1) NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (notification_id), UNIQUE KEY uq_notification_seller_order (seller_id, order_id), KEY idx_notifications_seller (seller_id), KEY idx_notifications_order (order_id)) ENGINE=InnoDB")
+  console.log('Order and notification tables are ready')
+}
+// Signed-in customer order endpoints. Customers can only read/cancel their own orders.
+app.get('/api/orders/mine', requireUser, async (req, res) => {
+  try {
+    const [orders] = await db.query('SELECT * FROM orders WHERE firebase_uid = ? ORDER BY placed_at DESC', [req.authUid])
+    const result = []
+    for (const order of orders) {
+      const [items] = await db.query('SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?', [order.order_id])
+      result.push(orderResponse(order, items))
+    }
+    res.json(result)
+  } catch (error) {
+    console.error('Load customer orders failed:', error)
+    res.status(500).json({ message: 'Could not load your orders.' })
+  }
+})
+
+app.post('/api/orders', requireUser, async (req, res) => {
+  let connection
+  try {
+    connection = await db.getConnection()
+    const body = req.body || {}
+    const buyer = body.buyer || {}
+    const requestedItems = Array.isArray(body.items) ? body.items : []
+    if (!requestedItems.length || !buyer.name || !buyer.address || !buyer.contactNumber) {
+      return res.status(400).json({ message: 'Order items and complete buyer information are required.' })
+    }
+    await connection.beginTransaction()
+    const normalized = []
+    let total = 0
+    for (const item of requestedItems) {
+      const productId = Number(item.id ?? item.product_id)
+      const quantity = Math.floor(Number(item.qty ?? item.quantity))
+      if (!Number.isSafeInteger(productId) || productId < 1 || !Number.isSafeInteger(quantity) || quantity < 1) throw new Error('An order item has an invalid product or quantity.')
+      const [products] = await connection.query('SELECT product_id, product_name, image, image_path, sell_price, stock, seller_id FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 FOR UPDATE', [productId])
+      if (!products.length) throw new Error('A product in your cart is no longer available.')
+      const product = products[0]
+      if (Number(product.stock) < quantity) throw new Error(product.product_name + ' does not have enough stock.')
+      const price = Number(product.sell_price || 0)
+      total += price * quantity
+      normalized.push({ ...product, quantity, price })
+    }
+    const orderKey = 'ord_' + Date.now() + '_' + Math.random().toString(36).slice(2, 9)
+    const [orderResult] = await connection.query(
+      'INSERT INTO orders (firebase_order_id, firebase_uid, customer_name, customer_email, buyer_name, buyer_address, buyer_contact, payment_method, total, status, placed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())',
+      [orderKey, req.authUid, req.authUser.name || buyer.name, req.authUser.email || null, buyer.name, buyer.address, buyer.contactNumber, body.paymentMethod || 'COD', total, 'To Ship']
+    )
+    for (const item of normalized) {
+      await connection.query('INSERT INTO order_items (order_id, product_id, product_name, image, unit_price, quantity, seller_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [orderResult.insertId, item.product_id, item.product_name, item.image || item.image_path || '', item.price, item.quantity, item.seller_id || null])
+      await connection.query('UPDATE products SET stock = stock - ? WHERE product_id = ?', [item.quantity, item.product_id])
+    }
+    await connection.commit()
+    const [rows] = await db.query('SELECT * FROM orders WHERE order_id = ?', [orderResult.insertId])
+    const [savedItems] = await db.query('SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?', [orderResult.insertId])
+    res.status(201).json(orderResponse(rows[0], savedItems))
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {})
+    console.error('Create customer order failed:', error)
+    res.status(400).json({ message: error.message || 'Could not place order.' })
+  } finally {
+    if (connection) connection.release()
+  }
+})
+
+app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
+  let connection
+  try {
+    connection = await db.getConnection()
+    await connection.beginTransaction()
+    const [orders] = await connection.query("SELECT * FROM orders WHERE (firebase_order_id = ? OR order_id = ?) AND firebase_uid = ? LIMIT 1 FOR UPDATE", [req.params.id, req.params.id, req.authUid])
+    if (!orders.length) {
+      await connection.rollback()
+      return res.status(404).json({ message: 'Order not found.' })
+    }
+    if (['Cancelled', 'Shipped', 'Delivered'].includes(orders[0].status)) {
+      await connection.rollback()
+      return res.status(400).json({ message: 'This order can no longer be cancelled.' })
+    }
+    const [items] = await connection.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orders[0].order_id])
+    for (const item of items) if (item.product_id) await connection.query('UPDATE products SET stock = stock + ? WHERE product_id = ?', [item.quantity, item.product_id])
+    await connection.query("UPDATE orders SET status = 'Cancelled', cancel_reason = ? WHERE order_id = ?", [String(req.body?.reason || '').slice(0, 2000), orders[0].order_id])
+    await connection.commit()
+    res.json({ message: 'Order cancelled and stock restored.' })
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {})
+    console.error('Cancel customer order failed:', error)
+    res.status(500).json({ message: 'Could not cancel order.' })
+  } finally {
+    if (connection) connection.release()
+  }
+})
+
+// User profile data is stored in MySQL; Firebase is used only to verify identity.
+app.patch('/api/profile', requireUser, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const allowed = { fullName: 'name', username: 'username', photoURL: 'photo_url', phone: 'phone', address: 'address' }
+    const fields = Object.keys(allowed).filter(key => Object.prototype.hasOwnProperty.call(body, key))
+    if (!fields.length) return res.status(400).json({ message: 'No profile fields were provided.' })
+    const values = fields.map(key => body[key] == null ? null : String(body[key]).trim())
+    await db.query('UPDATE users SET ' + fields.map(key => allowed[key] + ' = ?').join(', ') + ' WHERE user_id = ?', [...values, req.authUser.user_id])
+    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role, username, photo_url, phone, address FROM users WHERE user_id = ? LIMIT 1', [req.authUser.user_id])
+    const user = rows[0]
+    res.json({ id: user.firebase_uid, uid: user.firebase_uid, fullName: user.name, name: user.name, email: user.email, role: user.role, username: user.username || '', photoURL: user.photo_url || null, phone: user.phone || '', address: user.address || '' })
+  } catch (error) {
+    console.error('Save MySQL profile failed:', error)
+    res.status(500).json({ message: 'Could not save profile to MySQL.' })
+  }
+})
+
+// Protect admin-only user and order management endpoints below this line.
 app.use('/api', requireAdmin)
 
 // Product CRUD is registered above; admin-only routes continue below.
@@ -437,6 +581,7 @@ app.get('/api/orders', async (req, res) => {
 })
 
 app.patch('/api/orders/:id', async (req, res) => {
+  let connection
   try {
     const allowedStatuses = ['To Ship', 'Processing', 'Shipped', 'Delivered', 'Cancelled']
     const status = String(req.body?.status || '')
@@ -444,24 +589,54 @@ app.patch('/api/orders/:id', async (req, res) => {
       return res.status(400).json({ message: 'Invalid order status.' })
     }
 
-    const [result] = await db.query(
-      'UPDATE orders SET status = ? WHERE firebase_order_id = ? OR order_id = ?',
-      [status, req.params.id, req.params.id]
-    )
-    if (!result.affectedRows) return res.status(404).json({ message: 'Order not found.' })
-
-    const [rows] = await db.query(
-      'SELECT * FROM orders WHERE firebase_order_id = ? OR order_id = ? LIMIT 1',
+    connection = await db.getConnection()
+    await connection.beginTransaction()
+    const [orders] = await connection.query(
+      'SELECT * FROM orders WHERE firebase_order_id = ? OR order_id = ? LIMIT 1 FOR UPDATE',
       [req.params.id, req.params.id]
     )
+    if (!orders.length) {
+      await connection.rollback()
+      return res.status(404).json({ message: 'Order not found.' })
+    }
+
+    const order = orders[0]
+    if (order.status === 'Cancelled' && status !== 'Cancelled') {
+      await connection.rollback()
+      return res.status(400).json({ message: 'Cancelled orders cannot be reopened. Create a new order instead.' })
+    }
+
+    // Restore stock exactly once when an admin cancels an active order.
+    if (status === 'Cancelled' && order.status !== 'Cancelled') {
+      const [itemsToRestore] = await connection.query(
+        'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
+        [order.order_id]
+      )
+      for (const item of itemsToRestore) {
+        if (item.product_id) {
+          await connection.query(
+            'UPDATE products SET stock = stock + ? WHERE product_id = ?',
+            [item.quantity, item.product_id]
+          )
+        }
+      }
+    }
+
+    await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [status, order.order_id])
+    await connection.commit()
+
+    const [rows] = await db.query('SELECT * FROM orders WHERE order_id = ? LIMIT 1', [order.order_id])
     const [items] = await db.query(
       'SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?',
-      [rows[0].order_id]
+      [order.order_id]
     )
     res.json(orderResponse(rows[0], items))
   } catch (error) {
+    if (connection) await connection.rollback().catch(() => {})
     console.error('Update order failed:', error)
     res.status(500).json({ message: 'Could not update order.' })
+  } finally {
+    if (connection) connection.release()
   }
 })
 
@@ -525,7 +700,10 @@ async function startServer() {
     const connection = await db.getConnection()
     console.log('Database Connected')
     connection.release()
+    await ensureUserCompatibility()
     await ensureProductImageColumn()
+    await ensureCategoryTable()
+    await ensureOrderTables()
     const readyConnection = await db.getConnection()
     readyConnection.release()
 

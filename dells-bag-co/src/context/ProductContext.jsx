@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { PRODUCTS as FALLBACK_PRODUCTS } from '../data/products.js'
 
 const ProductContext = createContext(null)
@@ -26,6 +26,7 @@ function normalizeProduct(product) {
 export function ProductProvider({ children }) {
   const [products, setProducts] = useState(FALLBACK_PRODUCTS)
   const [productsReady, setProductsReady] = useState(false)
+  const hasLoadedProducts = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -34,11 +35,14 @@ export function ProductProvider({ children }) {
         const response = await fetch(`${API_BASE}/products`)
         if (!response.ok) throw new Error(`Products API returned ${response.status}`)
         const rows = await response.json()
-        if (active) setProducts(Array.isArray(rows) ? rows.map(normalizeProduct) : [])
+        if (active) {
+          setProducts(Array.isArray(rows) ? rows.map(normalizeProduct) : [])
+          hasLoadedProducts.current = true
+        }
       } catch (error) {
         console.error('Could not load products from XAMPP MySQL API:', error)
         // Keep the existing storefront usable if the local API is temporarily offline.
-        if (active && !productsReady) setProducts(FALLBACK_PRODUCTS)
+        if (active && !hasLoadedProducts.current) setProducts(FALLBACK_PRODUCTS)
       } finally {
         if (active) setProductsReady(true)
       }

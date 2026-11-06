@@ -10,6 +10,7 @@ import Shop from './pages/Shop.jsx'
 import Orders from './pages/Orders.jsx'
 import Profile from './pages/Profile.jsx'
 import AdminDashboard from './pages/AdminDashboard.jsx'
+import SellerDashboard from './pages/SellerDashboard.jsx'
 
 function Loader() {
   return (
@@ -88,7 +89,7 @@ function App() {
               </RequireAuth>
             }
           />
-          <Route path="/seller-dashboard" element={<LegacySellerRoute />} />
+          <Route path="/seller-dashboard" element={<RequireAuth><SellerDashboard /></RequireAuth>} />
           <Route
             path="/shop"
             element={
