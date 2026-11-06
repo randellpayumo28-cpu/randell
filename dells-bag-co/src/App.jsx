@@ -6,7 +6,6 @@ import Landing from './pages/Landing.jsx'
 import Login from './pages/Login.jsx'
 import Signup from './pages/Signup.jsx'
 import Dashboard from './pages/Dashboard.jsx'
-import SellerDashboard from './pages/SellerDashboard.jsx'
 import Shop from './pages/Shop.jsx'
 import Orders from './pages/Orders.jsx'
 import Profile from './pages/Profile.jsx'
@@ -33,15 +32,11 @@ function RequireAuth({ children }) {
   return children
 }
 
-function RequireSellerAuth({ children }) {
-  const { currentUser, authReady, isAuthenticated } = useAuth()
-
+function LegacySellerRoute() {
+  const { authReady, isAuthenticated, isAdmin } = useAuth()
   if (!authReady && !isAuthenticated) return <Loader />
   if (!isAuthenticated) return <Navigate to="/login" replace />
-  if (currentUser?.role === 'admin') return <Navigate to="/admin-dashboard" replace />
-  if (currentUser?.role !== 'seller') return <Navigate to="/dashboard" replace />
-
-  return children
+  return <Navigate to={isAdmin ? '/admin-dashboard' : '/dashboard'} replace />
 }
 
 function RequireAdminAuth({ children }) {
@@ -93,14 +88,7 @@ function App() {
               </RequireAuth>
             }
           />
-          <Route
-            path="/seller-dashboard"
-            element={
-              <RequireSellerAuth>
-                <SellerDashboard />
-              </RequireSellerAuth>
-            }
-          />
+          <Route path="/seller-dashboard" element={<LegacySellerRoute />} />
           <Route
             path="/shop"
             element={
