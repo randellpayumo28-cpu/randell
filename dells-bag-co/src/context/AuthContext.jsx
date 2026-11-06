@@ -19,6 +19,7 @@ import { auth, googleProvider } from '../firebase.js'
 
 import {
   ensureUserProfile,
+  getDatabaseProfile,
   saveUserProfile
 } from '../services/userProfile.js'
 
@@ -69,8 +70,14 @@ export function AuthProvider({ children }) {
 
       try {
         const profile = await ensureUserProfile(fbUser)
+        const databaseProfile = await getDatabaseProfile(fbUser)
 
-        setCurrentUser(profile)
+        setCurrentUser({
+          ...profile,
+          role: databaseProfile.role || 'user',
+          fullName: databaseProfile.name || profile.fullName,
+          email: databaseProfile.email || profile.email,
+        })
 
       } catch (err) {
         console.error(
@@ -136,12 +143,14 @@ export function AuthProvider({ children }) {
             role: 'user',
           }
         )
+        const databaseProfile = await getDatabaseProfile(cred.user)
+        const trustedProfile = { ...profile, role: databaseProfile.role || 'user' }
 
-        setCurrentUser(profile)
+        setCurrentUser(trustedProfile)
 
         return {
           ok: true,
-          user: profile
+          user: trustedProfile
         }
 
       } catch (err) {
@@ -181,12 +190,14 @@ export function AuthProvider({ children }) {
       setFirebaseUser(result.user)
 
       const profile = await ensureUserProfile(result.user)
+      const databaseProfile = await getDatabaseProfile(result.user)
+      const trustedProfile = { ...profile, role: databaseProfile.role || 'user' }
 
-      setCurrentUser(profile)
+      setCurrentUser(trustedProfile)
 
       return {
         ok: true,
-        user: profile
+        user: trustedProfile
       }
 
     } catch (err) {
