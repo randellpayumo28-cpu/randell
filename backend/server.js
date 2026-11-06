@@ -190,14 +190,14 @@ app.get('/api/health', async (req, res) => {
   }
 })
 
-// ---------- Firebase user authentication for seller product management ----------
+// ---------- Firebase user authentication for account and admin actions ----------
 async function requireUser(req, res, next) {
   try {
     if (!firebaseAuth) return res.status(503).json({ message: 'Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env.' })
     const match = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i)
     if (!match) return res.status(401).json({ message: 'Please sign in again.' })
     const decoded = await firebaseAuth.verifyIdToken(match[1])
-    const name = decoded.name || (decoded.email || 'Seller').split('@')[0]
+    const name = decoded.name || (decoded.email || 'User').split('@')[0]
     // Every newly seen Firebase account starts as a normal user. On duplicate,
     // update profile details only; never overwrite the role manually set in MySQL.
     await db.query(
@@ -240,7 +240,7 @@ app.get('/api/auth/me', requireUser, (req, res) => {
   })
 })
 
-// Public catalog read: Shop and Seller Dashboard always read the same MySQL products.
+// Public catalog read: the Shop and Admin Dashboard use the same MySQL products.
 async function getPublicProducts(req, res) {
   try {
     const [rows] = await db.query(
@@ -278,7 +278,7 @@ app.post(['/api/products', '/api/product'], requireUser, requireAdminRole, uploa
   }
 })
 
-app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireSellerOrAdmin, upload.single('image'), async (req, res) => {
+app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole, upload.single('image'), async (req, res) => {
   try {
     const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
     if (!found.length) {
