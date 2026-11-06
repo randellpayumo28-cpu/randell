@@ -216,17 +216,7 @@ async function requireUser(req, res, next) {
   }
 }
 
-// Only admin accounts may create, edit, or delete catalog products.
-function requireAdminRole(req, res, next) {
-  const role = String(req.authUser?.role || '').trim().toLowerCase()
-  if (role !== 'admin') {
-    return res.status(403).json({
-      message: 'Admin access is required. Regular user accounts cannot manage products.'
-    })
-  }
-  req.isAdmin = true
-  next()
-}
+// Product write routes enforce ownership: users manage their own listings; admins manage all listings.
 
 // Return the authoritative account role from MySQL after Firebase verifies identity.
 // This endpoint also creates a missing profile with role='user'.
@@ -355,6 +345,7 @@ async function ensureProductImageColumn() {
   const [columns] = await db.query('SHOW COLUMNS FROM products')
   const existing = new Set(columns.map(column => column.Field))
   const additions = [
+    ['image_path', 'ALTER TABLE products ADD COLUMN image_path VARCHAR(255) NULL'],
     ['material', 'ALTER TABLE products ADD COLUMN material VARCHAR(150) NULL'],
     ['image', 'ALTER TABLE products ADD COLUMN image MEDIUMTEXT NULL'],
     ['badge', 'ALTER TABLE products ADD COLUMN badge VARCHAR(80) NULL'],
@@ -368,13 +359,21 @@ async function ensureProductImageColumn() {
       console.log(`Added missing products.${field} column`)
     }
   }
-  await db.query("UPDATE products SET image = image_path WHERE (image IS NULL OR image = '') AND image_path IS NOT NULL AND image_path <> ''")
+  if (existing.has('image_path')) {
+    await db.query("UPDATE products SET image = image_path WHERE (image IS NULL OR image = '') AND image_path IS NOT NULL AND image_path <> ''")
+  }
   const [imageColumn] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
   if (imageColumn.length && !/mediumtext|longtext/i.test(String(imageColumn[0].Type))) {
     await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
     console.log('Products image column upgraded to MEDIUMTEXT')
   }
   await db.query('UPDATE products SET is_deleted = 0 WHERE is_deleted IS NULL')
+}
+
+// Categories are shared reference data for product listings and admin forms.
+async function ensureCategoryTable() {
+  await db.query("CREATE TABLE IF NOT EXISTS categories (category_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, category_name VARCHAR(100) NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (category_id), UNIQUE KEY uq_categories_name (category_name)) ENGINE=InnoDB")
+  await db.query("INSERT IGNORE INTO categories (category_name) VALUES ('Backpack'), ('Handbag'), ('Tote Bag'), ('Sling Bag'), ('Travel Bag'), ('Wallet')")
 }
 
 // Create missing order tables without changing existing users or products.
@@ -671,6 +670,7 @@ async function startServer() {
     connection.release()
     await ensureUserCompatibility()
     await ensureProductImageColumn()
+    await ensureCategoryTable()
     await ensureOrderTables()
     const readyConnection = await db.getConnection()
     readyConnection.release()
