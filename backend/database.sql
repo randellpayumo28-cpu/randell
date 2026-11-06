@@ -13,13 +13,21 @@ CREATE TABLE IF NOT EXISTS users (
   firebase_uid VARCHAR(128) NULL,
   name VARCHAR(150) NOT NULL,
   email VARCHAR(191) NULL,
-  role ENUM('user', 'seller', 'admin') NOT NULL DEFAULT 'user',
+  role ENUM('user', 'admin') NOT NULL DEFAULT 'user',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id),
   UNIQUE KEY uq_users_firebase_uid (firebase_uid),
   UNIQUE KEY uq_users_email (email)
 ) ENGINE=InnoDB;
+
+-- Normalize any legacy seller accounts into regular user accounts; keep all account data.
+UPDATE users SET role = 'user' WHERE role = 'seller';
+ALTER TABLE users MODIFY role ENUM('user', 'admin') NOT NULL DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(40) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT NULL;
 
 CREATE TABLE IF NOT EXISTS categories (
   category_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
