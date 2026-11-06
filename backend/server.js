@@ -254,8 +254,8 @@ async function getPublicProducts(req, res) {
 }
 app.get(['/api/products', '/api/product'], getPublicProducts)
 
-// Product write operations are restricted to admin accounts only.
-app.post(['/api/products', '/api/product'], requireUser, requireAdminRole, upload.single('image'), async (req, res) => {
+// Signed-in users can list and manage their own products; admins can manage every product.
+app.post(['/api/products', '/api/product'], requireUser, upload.single('image'), async (req, res) => {
   try {
     const b = req.body || {}
     const name = String(b.name || b.product || '').trim()
@@ -272,18 +272,18 @@ app.post(['/api/products', '/api/product'], requireUser, requireAdminRole, uploa
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [result.insertId])
     res.status(201).json(productResponse(rows[0]))
   } catch (error) {
-    console.error('Admin create product failed:', error)
+    console.error('Create product failed:', error)
     if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not save product to MySQL.' })
   }
 })
 
-app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole, upload.single('image'), async (req, res) => {
+app.put(['/api/products/:id', '/api/product/:id'], requireUser, upload.single('image'), async (req, res) => {
   try {
-    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
+    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 AND (? = 1 OR seller_id = ?) LIMIT 1', [req.params.id, req.isAdmin ? 1 : 0, req.authUid])
     if (!found.length) {
       if (req.file) removeImageFile(req.file.filename)
-      return res.status(404).json({ message: 'Product not found.' })
+      return res.status(404).json({ message: 'Product not found or you do not own this product.' })
     }
     const old = found[0]
     const b = req.body || {}
@@ -302,21 +302,21 @@ app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [req.params.id])
     res.json(productResponse(rows[0]))
   } catch (error) {
-    console.error('Admin update product failed:', error)
+    console.error('Update product failed:', error)
     if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not update product in MySQL.' })
   }
 })
 
-app.delete(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole, async (req, res) => {
+app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
   try {
-    const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
+    const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 AND (? = 1 OR seller_id = ?) LIMIT 1', [req.params.id, req.isAdmin ? 1 : 0, req.authUid])
     if (!found.length) return res.status(404).json({ message: 'Product not found.' })
     await db.query('UPDATE products SET is_deleted = 1 WHERE product_id = ?', [req.params.id])
     if (String(found[0].image || '').startsWith('/uploads/')) removeImageFile(found[0].image)
     res.json({ message: 'Product deleted successfully.' })
   } catch (error) {
-    console.error('Admin delete product failed:', error)
+    console.error('Delete product failed:', error)
     res.status(500).json({ message: 'Could not delete product from MySQL.' })
   }
 })
@@ -349,7 +349,7 @@ async function ensureProductImageColumn() {
   await db.query('UPDATE products SET is_deleted = 0 WHERE is_deleted IS NULL')
 }
 
-// Protect admin-only management endpoints below this line.
+// Protect admin-only user and order management endpoints below this line.
 app.use('/api', requireAdmin)
 
 // Product CRUD is registered above; admin-only routes continue below.
