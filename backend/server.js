@@ -198,8 +198,10 @@ async function requireUser(req, res, next) {
     if (!match) return res.status(401).json({ message: 'Please sign in again.' })
     const decoded = await firebaseAuth.verifyIdToken(match[1])
     const name = decoded.name || (decoded.email || 'Seller').split('@')[0]
+    // Every newly seen Firebase account starts as a normal user. On duplicate,
+    // update profile details only; never overwrite the role manually set in MySQL.
     await db.query(
-      'INSERT INTO users (firebase_uid, name, email) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email)',
+      "INSERT INTO users (firebase_uid, name, email, role) VALUES (?, ?, ?, 'user') ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email)",
       [decoded.uid, name, decoded.email || null]
     )
     const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role FROM users WHERE firebase_uid = ? LIMIT 1', [decoded.uid])
@@ -213,6 +215,18 @@ async function requireUser(req, res, next) {
     res.status(401).json({ message: 'Invalid or expired sign-in. Please log in again.' })
   }
 }
+
+// Return the authoritative account role from MySQL after Firebase verifies identity.
+// This endpoint also creates a missing profile with role='user'.
+app.get('/api/auth/me', requireUser, (req, res) => {
+  res.json({
+    id: req.authUser.firebase_uid || String(req.authUser.user_id),
+    uid: req.authUser.firebase_uid,
+    name: req.authUser.name,
+    email: req.authUser.email,
+    role: String(req.authUser.role || 'user').trim().toLowerCase()
+  })
+})
 
 // Public catalog read: Shop and Seller Dashboard always read the same MySQL products.
 async function getPublicProducts(req, res) {
