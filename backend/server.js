@@ -580,6 +580,7 @@ app.get('/api/orders', async (req, res) => {
 })
 
 app.patch('/api/orders/:id', async (req, res) => {
+  let connection
   try {
     const allowedStatuses = ['To Ship', 'Processing', 'Shipped', 'Delivered', 'Cancelled']
     const status = String(req.body?.status || '')
@@ -587,24 +588,54 @@ app.patch('/api/orders/:id', async (req, res) => {
       return res.status(400).json({ message: 'Invalid order status.' })
     }
 
-    const [result] = await db.query(
-      'UPDATE orders SET status = ? WHERE firebase_order_id = ? OR order_id = ?',
-      [status, req.params.id, req.params.id]
-    )
-    if (!result.affectedRows) return res.status(404).json({ message: 'Order not found.' })
-
-    const [rows] = await db.query(
-      'SELECT * FROM orders WHERE firebase_order_id = ? OR order_id = ? LIMIT 1',
+    connection = await db.getConnection()
+    await connection.beginTransaction()
+    const [orders] = await connection.query(
+      'SELECT * FROM orders WHERE firebase_order_id = ? OR order_id = ? LIMIT 1 FOR UPDATE',
       [req.params.id, req.params.id]
     )
+    if (!orders.length) {
+      await connection.rollback()
+      return res.status(404).json({ message: 'Order not found.' })
+    }
+
+    const order = orders[0]
+    if (order.status === 'Cancelled' && status !== 'Cancelled') {
+      await connection.rollback()
+      return res.status(400).json({ message: 'Cancelled orders cannot be reopened. Create a new order instead.' })
+    }
+
+    // Restore stock exactly once when an admin cancels an active order.
+    if (status === 'Cancelled' && order.status !== 'Cancelled') {
+      const [itemsToRestore] = await connection.query(
+        'SELECT product_id, quantity FROM order_items WHERE order_id = ?',
+        [order.order_id]
+      )
+      for (const item of itemsToRestore) {
+        if (item.product_id) {
+          await connection.query(
+            'UPDATE products SET stock = stock + ? WHERE product_id = ?',
+            [item.quantity, item.product_id]
+          )
+        }
+      }
+    }
+
+    await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [status, order.order_id])
+    await connection.commit()
+
+    const [rows] = await db.query('SELECT * FROM orders WHERE order_id = ? LIMIT 1', [order.order_id])
     const [items] = await db.query(
       'SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?',
-      [rows[0].order_id]
+      [order.order_id]
     )
     res.json(orderResponse(rows[0], items))
   } catch (error) {
+    if (connection) await connection.rollback().catch(() => {})
     console.error('Update order failed:', error)
     res.status(500).json({ message: 'Could not update order.' })
+  } finally {
+    if (connection) connection.release()
   }
 })
 
