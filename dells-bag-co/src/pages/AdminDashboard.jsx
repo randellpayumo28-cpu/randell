@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../context/AuthContext.jsx'
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').replace(/\\/$/, '')
+const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 const TABS = ['Overview', 'Products', 'Users', 'Orders']
 const EMPTY_PRODUCT = { name: '', material: '', category: '', badge: '', img: '', price: '', stock: 0 }
 
