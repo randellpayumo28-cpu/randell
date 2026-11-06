@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import { useAuth } from './AuthContext.jsx'
 import { useProducts } from './ProductContext.jsx'
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').replace(/\\/$/, '')
+const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 const CART_KEY = 'dellsBagCoCart'
 const UNSEEN_ORDERS_KEY = 'dellsBagCoUnseenOrders'
 const CartContext = createContext(null)
