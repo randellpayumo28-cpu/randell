@@ -216,6 +216,20 @@ async function requireUser(req, res, next) {
   }
 }
 
+// Only seller and admin accounts may create, edit, or delete catalog products.
+// The role is read from MySQL after Firebase verifies the user's identity.
+function requireSellerOrAdmin(req, res, next) {
+  const role = String(req.authUser?.role || '').trim().toLowerCase()
+  if (role !== 'seller' && role !== 'admin') {
+    return res.status(403).json({
+      message: 'Seller or admin access is required. Your account is registered as a regular user.'
+    })
+  }
+  req.isAdmin = role === 'admin'
+  req.isSeller = role === 'seller'
+  next()
+}
+
 // Return the authoritative account role from MySQL after Firebase verifies identity.
 // This endpoint also creates a missing profile with role='user'.
 app.get('/api/auth/me', requireUser, (req, res) => {
@@ -244,7 +258,7 @@ app.get(['/api/products', '/api/product'], getPublicProducts)
 
 // Seller product write operations. Admins may manage every product; sellers may
 // only edit/delete products whose seller_id matches their Firebase UID.
-app.post(['/api/products', '/api/product'], requireUser, upload.single('image'), async (req, res) => {
+app.post(['/api/products', '/api/product'], requireUser, requireSellerOrAdmin, upload.single('image'), async (req, res) => {
   try {
     const b = req.body || {}
     const name = String(b.name || b.product || '').trim()
@@ -267,7 +281,7 @@ app.post(['/api/products', '/api/product'], requireUser, upload.single('image'),
   }
 })
 
-app.put(['/api/products/:id', '/api/product/:id'], requireUser, upload.single('image'), async (req, res) => {
+app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireSellerOrAdmin, upload.single('image'), async (req, res) => {
   try {
     const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
     if (!found.length) {
@@ -298,7 +312,7 @@ app.put(['/api/products/:id', '/api/product/:id'], requireUser, upload.single('i
   }
 })
 
-app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
+app.delete(['/api/products/:id', '/api/product/:id'], requireUser, requireSellerOrAdmin, async (req, res) => {
   try {
     const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
     if (!found.length) return res.status(404).json({ message: 'Product not found.' })
