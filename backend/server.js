@@ -394,8 +394,9 @@ app.get('/api/orders/mine', requireUser, async (req, res) => {
 })
 
 app.post('/api/orders', requireUser, async (req, res) => {
-  const connection = await db.getConnection()
+  let connection
   try {
+    connection = await db.getConnection()
     const body = req.body || {}
     const buyer = body.buyer || {}
     const requestedItems = Array.isArray(body.items) ? body.items : []
@@ -431,17 +432,18 @@ app.post('/api/orders', requireUser, async (req, res) => {
     const [savedItems] = await db.query('SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?', [orderResult.insertId])
     res.status(201).json(orderResponse(rows[0], savedItems))
   } catch (error) {
-    await connection.rollback()
+    if (connection) await connection.rollback().catch(() => {})
     console.error('Create customer order failed:', error)
     res.status(400).json({ message: error.message || 'Could not place order.' })
   } finally {
-    connection.release()
+    if (connection) connection.release()
   }
 })
 
 app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
-  const connection = await db.getConnection()
+  let connection
   try {
+    connection = await db.getConnection()
     await connection.beginTransaction()
     const [orders] = await connection.query("SELECT * FROM orders WHERE (firebase_order_id = ? OR order_id = ?) AND firebase_uid = ? LIMIT 1 FOR UPDATE", [req.params.id, req.params.id, req.authUid])
     if (!orders.length) {
@@ -458,7 +460,7 @@ app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
     await connection.commit()
     res.json({ message: 'Order cancelled and stock restored.' })
   } catch (error) {
-    await connection.rollback()
+    if (connection) await connection.rollback().catch(() => {})
     console.error('Cancel customer order failed:', error)
     res.status(500).json({ message: 'Could not cancel order.' })
   } finally {
