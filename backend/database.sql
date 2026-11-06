@@ -1,12 +1,12 @@
 -- Dell's Bag & Co local XAMPP database
--- Import this file in phpMyAdmin to create/use randell_bagcommerce.
+-- Import this file in phpMyAdmin to create/use dells_bag_co_db.
 -- Firebase Authentication remains the login provider; passwords are not stored here.
 
-CREATE DATABASE IF NOT EXISTS randell_bagcommerce
+CREATE DATABASE IF NOT EXISTS dells_bag_co_db
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE randell_bagcommerce;
+USE dells_bag_co_db;
 
 CREATE TABLE IF NOT EXISTS users (
   user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
