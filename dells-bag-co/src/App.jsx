@@ -33,6 +33,17 @@ function RequireAuth({ children }) {
   return children
 }
 
+function RequireSellerAuth({ children }) {
+  const { currentUser, authReady, isAuthenticated } = useAuth()
+
+  if (!authReady && !isAuthenticated) return <Loader />
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  if (currentUser?.role === 'admin') return <Navigate to="/admin-dashboard" replace />
+  if (currentUser?.role !== 'seller') return <Navigate to="/dashboard" replace />
+
+  return children
+}
+
 function RequireAdminAuth({ children }) {
   const { isAdmin, authReady, isAuthenticated } = useAuth()
   if (!authReady && !isAuthenticated) return <Loader />
@@ -85,9 +96,9 @@ function App() {
           <Route
             path="/seller-dashboard"
             element={
-              <RequireAuth>
+              <RequireSellerAuth>
                 <SellerDashboard />
-              </RequireAuth>
+              </RequireSellerAuth>
             }
           />
           <Route
