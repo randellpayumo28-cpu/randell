@@ -6,15 +6,14 @@ function ProductCard({ product }) {
 
   return (
     <div className="card h-100 shadow-sm product-card">
-      <div className="position-relative">
+      <div className="product-card-image position-relative">
         {product.badge && (
           <span className="badge bg-danger position-absolute top-0 start-0 m-2">{product.badge}</span>
         )}
         <img
           src={product.img}
           alt={product.name}
-          className="card-img-top"
-          style={{ aspectRatio: '4 / 5', objectFit: 'cover' }}
+          className="card-img-top product-card-image__img"
           loading="lazy"
         />
       </div>
