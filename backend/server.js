@@ -339,6 +339,15 @@ async function ensureUserCompatibility() {
     await db.query(sql)
     console.log('Added missing users.' + field + ' column')
   }
+
+  // The application has only two account roles. Existing seller accounts
+  // become normal user accounts; their accounts and products are retained.
+  const [roleColumns] = await db.query("SHOW COLUMNS FROM users LIKE 'role'")
+  if (roleColumns.length && String(roleColumns[0].Type).includes('seller')) {
+    await db.query("UPDATE users SET role = 'user' WHERE role = 'seller'")
+    await db.query("ALTER TABLE users MODIFY role ENUM('user', 'admin') NOT NULL DEFAULT 'user'")
+    console.log('Migrated legacy seller roles to user; roles are now user/admin only')
+  }
 }
 
 // Existing product rows and values are retained; only missing support columns are added.
