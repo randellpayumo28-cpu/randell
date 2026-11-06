@@ -204,7 +204,7 @@ async function requireUser(req, res, next) {
       "INSERT INTO users (firebase_uid, name, email, role) VALUES (?, ?, ?, 'user') ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email)",
       [decoded.uid, name, decoded.email || null]
     )
-    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role FROM users WHERE firebase_uid = ? LIMIT 1', [decoded.uid])
+    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role, username, photo_url, phone, address FROM users WHERE firebase_uid = ? LIMIT 1', [decoded.uid])
     if (!rows.length) return res.status(403).json({ message: 'Account profile was not found in MySQL.' })
     req.authUser = rows[0]
     req.authUid = decoded.uid
