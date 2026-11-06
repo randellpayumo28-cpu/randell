@@ -593,7 +593,6 @@ async function startServer() {
     await ensureProductImageColumn()
     const readyConnection = await db.getConnection()
     readyConnection.release()
-    connection.release()
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`)
