@@ -340,13 +340,13 @@ async function ensureUserCompatibility() {
     console.log('Added missing users.' + field + ' column')
   }
 
-  // The application has only two account roles. Existing seller accounts
-  // become normal user accounts; their accounts and products are retained.
+  // Keep the role model limited to user/admin; normalize any legacy seller value.
   const [roleColumns] = await db.query("SHOW COLUMNS FROM users LIKE 'role'")
-  if (roleColumns.length && String(roleColumns[0].Type).includes('seller')) {
-    await db.query("UPDATE users SET role = 'user' WHERE role = 'seller'")
-    await db.query("ALTER TABLE users MODIFY role ENUM('user', 'admin') NOT NULL DEFAULT 'user'")
-    console.log('Migrated legacy seller roles to user; roles are now user/admin only')
+  if (roleColumns.length) {
+    await db.query("UPDATE users SET role = 'user' WHERE LOWER(role) = 'seller'")
+    if (String(roleColumns[0].Type).toLowerCase().includes('seller')) {
+      await db.query("ALTER TABLE users MODIFY role ENUM('user', 'admin') NOT NULL DEFAULT 'user'")
+    }
   }
 }
 
@@ -377,6 +377,13 @@ async function ensureProductImageColumn() {
   await db.query('UPDATE products SET is_deleted = 0 WHERE is_deleted IS NULL')
 }
 
+// Create missing order tables without changing existing users or products.
+async function ensureOrderTables() {
+  await db.query("CREATE TABLE IF NOT EXISTS orders (order_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, firebase_order_id VARCHAR(191) NULL, firebase_uid VARCHAR(128) NULL, customer_name VARCHAR(150) NULL, customer_email VARCHAR(191) NULL, buyer_name VARCHAR(150) NULL, buyer_address TEXT NULL, buyer_contact VARCHAR(40) NULL, payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', total DECIMAL(12,2) NOT NULL DEFAULT 0.00, status VARCHAR(40) NOT NULL DEFAULT 'To Ship', cancel_reason TEXT NULL, placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP, PRIMARY KEY (order_id), UNIQUE KEY uq_orders_firebase_id (firebase_order_id), KEY idx_orders_user (firebase_uid), KEY idx_orders_status (status)) ENGINE=InnoDB")
+  await db.query("CREATE TABLE IF NOT EXISTS order_items (order_item_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, order_id BIGINT UNSIGNED NOT NULL, product_id INT(11) NULL, product_name VARCHAR(191) NOT NULL, image TEXT NULL, unit_price DECIMAL(12,2) NOT NULL DEFAULT 0.00, quantity INT UNSIGNED NOT NULL DEFAULT 1, seller_id VARCHAR(128) NULL, PRIMARY KEY (order_item_id), KEY idx_order_items_order (order_id), KEY idx_order_items_product (product_id), CONSTRAINT fk_order_items_order FOREIGN KEY (order_id) REFERENCES orders(order_id) ON DELETE CASCADE, CONSTRAINT fk_order_items_product FOREIGN KEY (product_id) REFERENCES products(product_id) ON DELETE SET NULL) ENGINE=InnoDB")
+  await db.query("CREATE TABLE IF NOT EXISTS notifications (notification_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, seller_id VARCHAR(128) NOT NULL, order_id VARCHAR(191) NOT NULL, buyer_name VARCHAR(150) NULL, buyer_address TEXT NULL, buyer_contact VARCHAR(40) NULL, payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', status VARCHAR(40) NOT NULL DEFAULT 'To Ship', items_json LONGTEXT NULL, placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, is_read TINYINT(1) NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (notification_id), UNIQUE KEY uq_notification_seller_order (seller_id, order_id), KEY idx_notifications_seller (seller_id), KEY idx_notifications_order (order_id)) ENGINE=InnoDB")
+  console.log('Order and notification tables are ready')
+}
 // Signed-in customer order endpoints. Customers can only read/cancel their own orders.
 app.get('/api/orders/mine', requireUser, async (req, res) => {
   try {
@@ -464,7 +471,7 @@ app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
     console.error('Cancel customer order failed:', error)
     res.status(500).json({ message: 'Could not cancel order.' })
   } finally {
-    connection.release()
+    if (connection) connection.release()
   }
 })
 
@@ -664,6 +671,7 @@ async function startServer() {
     connection.release()
     await ensureUserCompatibility()
     await ensureProductImageColumn()
+    await ensureOrderTables()
     const readyConnection = await db.getConnection()
     readyConnection.release()
 
