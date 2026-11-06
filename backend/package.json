@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "node server.js"
+    "dev": "nodemon server.js",
+    "start": "node server.js"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +16,8 @@
     "express": "^5.2.1",
     "multer": "^2.4.0",
     "mysql2": "^3.15.3",
-    "dotenv": "^16.6.1"
+    "dotenv": "^16.6.1",
+    "firebase-admin": "^13.5.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
