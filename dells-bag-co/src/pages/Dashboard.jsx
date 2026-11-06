@@ -119,7 +119,7 @@ function Dashboard() {
         </div>
         <div className="row g-3 mb-4">
           {featured.map((p) => (
-            <div className="col-6" key={p.id}>
+            <div className="col-6 col-md-4 col-lg-3" key={p.id}>
               <ProductCard product={p} />
             </div>
           ))}
