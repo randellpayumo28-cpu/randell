@@ -1,6 +1,6 @@
 import { auth } from '../firebase.js'
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').replace(/\\/$/, '')
+const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
 async function request(path, options = {}, user = auth.currentUser) {
   if (!user) throw new Error('Please sign in again.')
