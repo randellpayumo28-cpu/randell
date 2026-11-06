@@ -15,7 +15,7 @@ const { getAuth } = require('firebase-admin/auth')
 const PORT = process.env.PORT || 8080
 const app = express()
 
-app.use(express.json({ limit: '2mb' }))
+app.use(express.json({ limit: '10mb' }))
 app.use(cors({
   origin: process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',').map(value => value.trim())
@@ -27,11 +27,11 @@ app.use(cors({
 // ---------- MySQL connection (XAMPP) ----------
 
 const db = mysql.createPool({
-  host: 'localhost',
-  port: 3306,
-  user: 'root',
-  password: '',
-  database: 'randell_bagcommerce',
+  host: process.env.DB_HOST || '127.0.0.1',
+  port: Number(process.env.DB_PORT || 3306),
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'randell_bagcommerce',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
@@ -183,7 +183,119 @@ app.get('/api/health', async (req, res) => {
   }
 })
 
-// Protect management endpoints below this line.
+// ---------- Firebase user authentication for seller product management ----------
+async function requireUser(req, res, next) {
+  try {
+    if (!firebaseAuth) return res.status(503).json({ message: 'Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env.' })
+    const match = String(req.headers.authorization || '').match(/^Bearer\\s+(.+)$/i)
+    if (!match) return res.status(401).json({ message: 'Please sign in again.' })
+    const decoded = await firebaseAuth.verifyIdToken(match[1])
+    const name = decoded.name || (decoded.email || 'Seller').split('@')[0]
+    await db.query(
+      'INSERT INTO users (firebase_uid, name, email) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email)',
+      [decoded.uid, name, decoded.email || null]
+    )
+    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role FROM users WHERE firebase_uid = ? LIMIT 1', [decoded.uid])
+    if (!rows.length) return res.status(403).json({ message: 'Account profile was not found in MySQL.' })
+    req.authUser = rows[0]
+    req.authUid = decoded.uid
+    req.isAdmin = String(rows[0].role || '').toLowerCase() === 'admin'
+    next()
+  } catch (error) {
+    console.error('User authentication failed:', error.message)
+    res.status(401).json({ message: 'Invalid or expired sign-in. Please log in again.' })
+  }
+}
+
+// Public catalog read: Shop and Seller Dashboard always read the same MySQL products.
+app.get('/api/products', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM products WHERE is_deleted = 0 ORDER BY product_id DESC')
+    res.json(rows.map(productResponse))
+  } catch (error) {
+    console.error('Public products load failed:', error)
+    res.status(500).json({ message: 'Could not load products from MySQL.' })
+  }
+})
+app.get('/api/product', async (req, res) => {
+  try {
+    const [rows] = await db.query('SELECT * FROM products WHERE is_deleted = 0 ORDER BY product_id DESC')
+    res.json(rows.map(productResponse))
+  } catch (error) {
+    console.error('Products load failed:', error)
+    res.status(500).json({ message: 'Could not load products from MySQL.' })
+  }
+})
+
+// Seller product write operations. Admins may manage every product; sellers may
+// only edit/delete products whose seller_id matches their Firebase UID.
+app.post(['/api/products', '/api/product'], requireUser, async (req, res) => {
+  try {
+    const b = req.body || {}
+    const name = String(b.name || b.product || '').trim()
+    const category = String(b.category || '').trim()
+    if (!name || !category) return res.status(400).json({ message: 'Product name and category are required.' })
+    const [result] = await db.query(
+      'INSERT INTO products (product_name, category, material, buy_price, sell_price, stock, image, badge, seller_id, seller_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [name, category, b.material || category, Math.max(0, validNumber(b.buy, 0)), Math.max(0, validNumber(b.sell ?? b.price, 0)), Math.max(0, Math.floor(validNumber(b.stock, 0))), b.image || b.img || '', b.badge || null, req.authUid, req.authUser.name || 'Seller']
+    )
+    const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [result.insertId])
+    res.status(201).json(productResponse(rows[0]))
+  } catch (error) {
+    console.error('Seller create product failed:', error)
+    res.status(500).json({ message: 'Could not save product to MySQL.' })
+  }
+})
+
+app.put(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
+  try {
+    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND is_deleted = 0 LIMIT 1', [req.params.id])
+    if (!found.length) return res.status(404).json({ message: 'Product not found.' })
+    const old = found[0]
+    if (!req.isAdmin && String(old.seller_id || '') !== req.authUid) return res.status(403).json({ message: 'You can only edit products added by your account.' })
+    const b = req.body || {}
+    const name = String(b.name ?? b.product ?? old.product_name).trim()
+    const category = String(b.category ?? old.category).trim()
+    if (!name || !category) return res.status(400).json({ message: 'Product name and category are required.' })
+    await db.query(
+      'UPDATE products SET product_name=?, category=?, material=?, buy_price=?, sell_price=?, stock=?, image=?, badge=? WHERE product_id=?',
+      [name, category, b.material ?? old.material, Math.max(0, validNumber(b.buy ?? old.buy_price, 0)), Math.max(0, validNumber(b.sell ?? b.price ?? old.sell_price, 0)), Math.max(0, Math.floor(validNumber(b.stock ?? old.stock, 0))), b.image ?? b.img ?? old.image, b.badge ?? old.badge, req.params.id]
+    )
+    const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [req.params.id])
+    res.json(productResponse(rows[0]))
+  } catch (error) {
+    console.error('Seller update product failed:', error)
+    res.status(500).json({ message: 'Could not update product in MySQL.' })
+  }
+})
+
+app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
+  try {
+    const [found] = await db.query('SELECT seller_id FROM products WHERE product_id = ? AND is_deleted = 0 LIMIT 1', [req.params.id])
+    if (!found.length) return res.status(404).json({ message: 'Product not found.' })
+    if (!req.isAdmin && String(found[0].seller_id || '') !== req.authUid) return res.status(403).json({ message: 'You can only delete products added by your account.' })
+    await db.query('UPDATE products SET is_deleted = 1 WHERE product_id = ?', [req.params.id])
+    res.json({ message: 'Product deleted successfully.' })
+  } catch (error) {
+    console.error('Seller delete product failed:', error)
+    res.status(500).json({ message: 'Could not delete product from MySQL.' })
+  }
+})
+
+// Upgrade legacy TEXT image columns so compressed image data URLs fit.
+async function ensureProductImageColumn() {
+  try {
+    const [columns] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
+    if (columns.length && !/mediumtext|longtext/i.test(String(columns[0].Type))) {
+      await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
+      console.log('Products image column upgraded to MEDIUMTEXT')
+    }
+  } catch (error) {
+    console.warn('Could not check/upgrade products.image column:', error.message)
+  }
+}
+
+// Protect admin-only management endpoints below this line.
 app.use('/api', requireAdmin)
 
 // ==================================================
@@ -477,6 +589,10 @@ async function startServer() {
   try {
     const connection = await db.getConnection()
     console.log('Database Connected')
+    connection.release()
+    await ensureProductImageColumn()
+    const readyConnection = await db.getConnection()
+    readyConnection.release()
     connection.release()
 
     app.listen(PORT, () => {
