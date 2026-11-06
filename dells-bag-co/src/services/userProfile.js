@@ -79,3 +79,19 @@ export async function saveUserProfile(uid, updates) {
     { merge: true }
   )
 }
+
+
+/** Reads the trusted role from the Express/MySQL API, never from Firestore. */
+export async function getDatabaseProfile(user) {
+  if (!user) throw new Error('Please sign in again.')
+  const token = await user.getIdToken()
+  const apiBase = (import.meta.env.VITE_API_URL || 'http://localhost:8080/api').replace(/\\/$/, '')
+  const response = await fetch(`${apiBase}/auth/me`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.message || 'Could not verify account role from MySQL.')
+  }
+  return response.json()
+}
