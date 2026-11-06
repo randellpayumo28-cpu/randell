@@ -236,7 +236,11 @@ app.get('/api/auth/me', requireUser, (req, res) => {
     uid: req.authUser.firebase_uid,
     name: req.authUser.name,
     email: req.authUser.email,
-    role: String(req.authUser.role || 'user').trim().toLowerCase()
+    role: String(req.authUser.role || 'user').trim().toLowerCase(),
+    username: req.authUser.username || '',
+    photoURL: req.authUser.photo_url || null,
+    phone: req.authUser.phone || '',
+    address: req.authUser.address || ''
   })
 })
 
@@ -322,6 +326,21 @@ app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, r
 })
 
 // Safe additive compatibility for older phpMyAdmin product tables.
+async function ensureUserCompatibility() {
+  const [columns] = await db.query('SHOW COLUMNS FROM users')
+  const existing = new Set(columns.map(column => column.Field))
+  const additions = [
+    ['username', 'ALTER TABLE users ADD COLUMN username VARCHAR(100) NULL'],
+    ['photo_url', 'ALTER TABLE users ADD COLUMN photo_url TEXT NULL'],
+    ['phone', 'ALTER TABLE users ADD COLUMN phone VARCHAR(40) NULL'],
+    ['address', 'ALTER TABLE users ADD COLUMN address TEXT NULL']
+  ]
+  for (const [field, sql] of additions) if (!existing.has(field)) {
+    await db.query(sql)
+    console.log('Added missing users.' + field + ' column')
+  }
+}
+
 // Existing product rows and values are retained; only missing support columns are added.
 async function ensureProductImageColumn() {
   const [columns] = await db.query('SHOW COLUMNS FROM products')
@@ -435,6 +454,24 @@ app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
     res.status(500).json({ message: 'Could not cancel order.' })
   } finally {
     connection.release()
+  }
+})
+
+// User profile data is stored in MySQL; Firebase is used only to verify identity.
+app.patch('/api/profile', requireUser, async (req, res) => {
+  try {
+    const body = req.body || {}
+    const allowed = { fullName: 'name', username: 'username', photoURL: 'photo_url', phone: 'phone', address: 'address' }
+    const fields = Object.keys(allowed).filter(key => Object.prototype.hasOwnProperty.call(body, key))
+    if (!fields.length) return res.status(400).json({ message: 'No profile fields were provided.' })
+    const values = fields.map(key => body[key] == null ? null : String(body[key]).trim())
+    await db.query('UPDATE users SET ' + fields.map(key => allowed[key] + ' = ?').join(', ') + ' WHERE user_id = ?', [...values, req.authUser.user_id])
+    const [rows] = await db.query('SELECT user_id, firebase_uid, name, email, role, username, photo_url, phone, address FROM users WHERE user_id = ? LIMIT 1', [req.authUser.user_id])
+    const user = rows[0]
+    res.json({ id: user.firebase_uid, uid: user.firebase_uid, fullName: user.name, name: user.name, email: user.email, role: user.role, username: user.username || '', photoURL: user.photo_url || null, phone: user.phone || '', address: user.address || '' })
+  } catch (error) {
+    console.error('Save MySQL profile failed:', error)
+    res.status(500).json({ message: 'Could not save profile to MySQL.' })
   }
 })
 
@@ -614,6 +651,7 @@ async function startServer() {
     const connection = await db.getConnection()
     console.log('Database Connected')
     connection.release()
+    await ensureUserCompatibility()
     await ensureProductImageColumn()
     const readyConnection = await db.getConnection()
     readyConnection.release()
