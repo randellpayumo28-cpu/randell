@@ -119,7 +119,7 @@ function productResponse(row) {
     buy: Number(row.buy_price || 0),
     sell: Number(row.sell_price || 0),
     price: Number(row.sell_price || 0),
-    img: row.image || '',
+    img: row.image || row.image_path || '',
     sellerId: row.seller_id,
     sellerName: row.seller_name
   }
@@ -331,6 +331,7 @@ async function ensureProductImageColumn() {
       console.log(`Added missing products.${field} column`)
     }
   }
+  await db.query("UPDATE products SET image = image_path WHERE (image IS NULL OR image = '') AND image_path IS NOT NULL AND image_path <> ''")
   const [imageColumn] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
   if (imageColumn.length && !/mediumtext|longtext/i.test(String(imageColumn[0].Type))) {
     await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
