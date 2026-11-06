@@ -17,7 +17,7 @@ export function ProductProvider({ children }) {
         if (snapshot.empty) {
           setProducts(firstSnapshot.current ? FALLBACK_PRODUCTS : [])
         } else {
-          const next = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+          const next = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((product) => !product.isDeleted)
           next.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
           setProducts(next)
         }
