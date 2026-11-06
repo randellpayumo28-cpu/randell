@@ -216,17 +216,15 @@ async function requireUser(req, res, next) {
   }
 }
 
-// Only seller and admin accounts may create, edit, or delete catalog products.
-// The role is read from MySQL after Firebase verifies the user's identity.
-function requireSellerOrAdmin(req, res, next) {
+// Only admin accounts may create, edit, or delete catalog products.
+function requireAdminRole(req, res, next) {
   const role = String(req.authUser?.role || '').trim().toLowerCase()
-  if (role !== 'seller' && role !== 'admin') {
+  if (role !== 'admin') {
     return res.status(403).json({
-      message: 'Seller or admin access is required. Your account is registered as a regular user.'
+      message: 'Admin access is required. Regular user accounts cannot manage products.'
     })
   }
-  req.isAdmin = role === 'admin'
-  req.isSeller = role === 'seller'
+  req.isAdmin = true
   next()
 }
 
@@ -256,9 +254,8 @@ async function getPublicProducts(req, res) {
 }
 app.get(['/api/products', '/api/product'], getPublicProducts)
 
-// Seller product write operations. Admins may manage every product; sellers may
-// only edit/delete products whose seller_id matches their Firebase UID.
-app.post(['/api/products', '/api/product'], requireUser, requireSellerOrAdmin, upload.single('image'), async (req, res) => {
+// Product write operations are restricted to admin accounts only.
+app.post(['/api/products', '/api/product'], requireUser, requireAdminRole, upload.single('image'), async (req, res) => {
   try {
     const b = req.body || {}
     const name = String(b.name || b.product || '').trim()
@@ -275,7 +272,7 @@ app.post(['/api/products', '/api/product'], requireUser, requireSellerOrAdmin, u
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [result.insertId])
     res.status(201).json(productResponse(rows[0]))
   } catch (error) {
-    console.error('Seller create product failed:', error)
+    console.error('Admin create product failed:', error)
     if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not save product to MySQL.' })
   }
@@ -289,7 +286,6 @@ app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireSellerOrA
       return res.status(404).json({ message: 'Product not found.' })
     }
     const old = found[0]
-    if (!req.isAdmin && String(old.seller_id || '') !== req.authUid) return res.status(403).json({ message: 'You can only edit products added by your account.' })
     const b = req.body || {}
     const name = String(b.name ?? b.product ?? old.product_name).trim()
     const category = String(b.category ?? old.category).trim()
@@ -306,22 +302,21 @@ app.put(['/api/products/:id', '/api/product/:id'], requireUser, requireSellerOrA
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [req.params.id])
     res.json(productResponse(rows[0]))
   } catch (error) {
-    console.error('Seller update product failed:', error)
+    console.error('Admin update product failed:', error)
     if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not update product in MySQL.' })
   }
 })
 
-app.delete(['/api/products/:id', '/api/product/:id'], requireUser, requireSellerOrAdmin, async (req, res) => {
+app.delete(['/api/products/:id', '/api/product/:id'], requireUser, requireAdminRole, async (req, res) => {
   try {
     const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
     if (!found.length) return res.status(404).json({ message: 'Product not found.' })
-    if (!req.isAdmin && String(found[0].seller_id || '') !== req.authUid) return res.status(403).json({ message: 'You can only delete products added by your account.' })
     await db.query('UPDATE products SET is_deleted = 1 WHERE product_id = ?', [req.params.id])
     if (String(found[0].image || '').startsWith('/uploads/')) removeImageFile(found[0].image)
     res.json({ message: 'Product deleted successfully.' })
   } catch (error) {
-    console.error('Seller delete product failed:', error)
+    console.error('Admin delete product failed:', error)
     res.status(500).json({ message: 'Could not delete product from MySQL.' })
   }
 })
@@ -389,8 +384,8 @@ app.patch('/api/users/:id', async (req, res) => {
 
     if (updates.role !== undefined) {
       updates.role = String(updates.role).trim().toLowerCase()
-      if (!['user', 'seller', 'admin'].includes(updates.role)) {
-        return res.status(400).json({ message: 'Role must be user, seller or admin.' })
+      if (!['user', 'admin'].includes(updates.role)) {
+        return res.status(400).json({ message: 'Role must be user or admin.' })
       }
     }
 
