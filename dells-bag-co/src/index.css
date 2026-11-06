@@ -46,8 +46,20 @@ body {
   box-shadow: 0 .35rem 1rem rgba(0,0,0,.08) !important;
 }
 
-.product-card img {
+/* Keep all product photos in the same 4:5 portrait frame. */
+.product-card-image {
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
   background: #fafafa;
+}
+
+.product-card-image__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
 }
 
 .seller-revenue-card {
