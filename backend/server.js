@@ -33,7 +33,7 @@ const db = mysql.createPool({
   port: Number(process.env.DB_PORT || 3306),
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'randell_bagcommerce',
+  database: process.env.DB_NAME || 'dells_bag_co_db',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
@@ -177,11 +177,16 @@ async function requireAdmin(req, res, next) {
 
 app.get('/api/health', async (req, res) => {
   try {
-    await db.query('SELECT 1')
-    res.json({ success: true, database: 'connected', message: "Dell's Bag & Co API is running." })
+    const [rows] = await db.query('SELECT DATABASE() AS database_name')
+    res.json({
+      success: true,
+      database: 'connected',
+      database_name: rows[0]?.database_name || null,
+      message: "Dell's Bag & Co API is running."
+    })
   } catch (error) {
     console.error('Health check failed:', error.message)
-    res.status(500).json({ success: false, database: 'disconnected' })
+    res.status(500).json({ success: false, database: 'disconnected', message: error.message })
   }
 })
 
@@ -210,73 +215,82 @@ async function requireUser(req, res, next) {
 }
 
 // Public catalog read: Shop and Seller Dashboard always read the same MySQL products.
-app.get('/api/products', async (req, res) => {
+async function getPublicProducts(req, res) {
   try {
-    const [rows] = await db.query('SELECT * FROM products WHERE is_deleted = 0 ORDER BY product_id DESC')
+    const [rows] = await db.query(
+      'SELECT * FROM products WHERE COALESCE(is_deleted, 0) = 0 ORDER BY product_id DESC'
+    )
     res.json(rows.map(productResponse))
   } catch (error) {
     console.error('Public products load failed:', error)
-    res.status(500).json({ message: 'Could not load products from MySQL.' })
+    res.status(500).json({ message: 'Could not load products from MySQL.', error: error.message })
   }
-})
-app.get('/api/product', async (req, res) => {
-  try {
-    const [rows] = await db.query('SELECT * FROM products WHERE is_deleted = 0 ORDER BY product_id DESC')
-    res.json(rows.map(productResponse))
-  } catch (error) {
-    console.error('Products load failed:', error)
-    res.status(500).json({ message: 'Could not load products from MySQL.' })
-  }
-})
+}
+app.get(['/api/products', '/api/product'], getPublicProducts)
 
 // Seller product write operations. Admins may manage every product; sellers may
 // only edit/delete products whose seller_id matches their Firebase UID.
-app.post(['/api/products', '/api/product'], requireUser, async (req, res) => {
+app.post(['/api/products', '/api/product'], requireUser, upload.single('image'), async (req, res) => {
   try {
     const b = req.body || {}
     const name = String(b.name || b.product || '').trim()
     const category = String(b.category || '').trim()
-    if (!name || !category) return res.status(400).json({ message: 'Product name and category are required.' })
+    if (!name || !category) {
+      if (req.file) removeImageFile(req.file.filename)
+      return res.status(400).json({ message: 'Product name and category are required.' })
+    }
+    const image = req.file ? `/uploads/${req.file.filename}` : (b.image || b.img || '')
     const [result] = await db.query(
-      'INSERT INTO products (product_name, category, material, buy_price, sell_price, stock, image, badge, seller_id, seller_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [name, category, b.material || category, Math.max(0, validNumber(b.buy, 0)), Math.max(0, validNumber(b.sell ?? b.price, 0)), Math.max(0, Math.floor(validNumber(b.stock, 0))), b.image || b.img || '', b.badge || null, req.authUid, req.authUser.name || 'Seller']
+      'INSERT INTO products (product_name, category, material, buy_price, sell_price, stock, image, badge, seller_id, seller_name, is_deleted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)',
+      [name, category, b.material || category, Math.max(0, validNumber(b.buy, 0)), Math.max(0, validNumber(b.sell ?? b.price, 0)), Math.max(0, Math.floor(validNumber(b.stock, 0))), image, b.badge || null, req.authUid, req.authUser.name || 'Seller']
     )
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [result.insertId])
     res.status(201).json(productResponse(rows[0]))
   } catch (error) {
     console.error('Seller create product failed:', error)
+    if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not save product to MySQL.' })
   }
 })
 
-app.put(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
+app.put(['/api/products/:id', '/api/product/:id'], requireUser, upload.single('image'), async (req, res) => {
   try {
-    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND is_deleted = 0 LIMIT 1', [req.params.id])
-    if (!found.length) return res.status(404).json({ message: 'Product not found.' })
+    const [found] = await db.query('SELECT * FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
+    if (!found.length) {
+      if (req.file) removeImageFile(req.file.filename)
+      return res.status(404).json({ message: 'Product not found.' })
+    }
     const old = found[0]
     if (!req.isAdmin && String(old.seller_id || '') !== req.authUid) return res.status(403).json({ message: 'You can only edit products added by your account.' })
     const b = req.body || {}
     const name = String(b.name ?? b.product ?? old.product_name).trim()
     const category = String(b.category ?? old.category).trim()
-    if (!name || !category) return res.status(400).json({ message: 'Product name and category are required.' })
+    if (!name || !category) {
+      if (req.file) removeImageFile(req.file.filename)
+      return res.status(400).json({ message: 'Product name and category are required.' })
+    }
+    const image = req.file ? `/uploads/${req.file.filename}` : (b.image ?? b.img ?? old.image)
     await db.query(
       'UPDATE products SET product_name=?, category=?, material=?, buy_price=?, sell_price=?, stock=?, image=?, badge=? WHERE product_id=?',
-      [name, category, b.material ?? old.material, Math.max(0, validNumber(b.buy ?? old.buy_price, 0)), Math.max(0, validNumber(b.sell ?? b.price ?? old.sell_price, 0)), Math.max(0, Math.floor(validNumber(b.stock ?? old.stock, 0))), b.image ?? b.img ?? old.image, b.badge ?? old.badge, req.params.id]
+      [name, category, b.material ?? old.material, Math.max(0, validNumber(b.buy ?? old.buy_price, 0)), Math.max(0, validNumber(b.sell ?? b.price ?? old.sell_price, 0)), Math.max(0, Math.floor(validNumber(b.stock ?? old.stock, 0))), image, b.badge ?? old.badge, req.params.id]
     )
+    if (req.file && old.image && old.image !== image) removeImageFile(old.image)
     const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [req.params.id])
     res.json(productResponse(rows[0]))
   } catch (error) {
     console.error('Seller update product failed:', error)
+    if (req.file) removeImageFile(req.file.filename)
     res.status(500).json({ message: 'Could not update product in MySQL.' })
   }
 })
 
 app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, res) => {
   try {
-    const [found] = await db.query('SELECT seller_id FROM products WHERE product_id = ? AND is_deleted = 0 LIMIT 1', [req.params.id])
+    const [found] = await db.query('SELECT seller_id, image FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1', [req.params.id])
     if (!found.length) return res.status(404).json({ message: 'Product not found.' })
     if (!req.isAdmin && String(found[0].seller_id || '') !== req.authUid) return res.status(403).json({ message: 'You can only delete products added by your account.' })
     await db.query('UPDATE products SET is_deleted = 1 WHERE product_id = ?', [req.params.id])
+    if (String(found[0].image || '').startsWith('/uploads/')) removeImageFile(found[0].image)
     res.json({ message: 'Product deleted successfully.' })
   } catch (error) {
     console.error('Seller delete product failed:', error)
@@ -284,142 +298,37 @@ app.delete(['/api/products/:id', '/api/product/:id'], requireUser, async (req, r
   }
 })
 
-// Upgrade legacy TEXT image columns so compressed image data URLs fit.
+// Safe additive compatibility for older phpMyAdmin product tables.
+// Existing product rows and values are retained; only missing support columns are added.
 async function ensureProductImageColumn() {
-  try {
-    const [columns] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
-    if (columns.length && !/mediumtext|longtext/i.test(String(columns[0].Type))) {
-      await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
-      console.log('Products image column upgraded to MEDIUMTEXT')
+  const [columns] = await db.query('SHOW COLUMNS FROM products')
+  const existing = new Set(columns.map(column => column.Field))
+  const additions = [
+    ['material', 'ALTER TABLE products ADD COLUMN material VARCHAR(150) NULL'],
+    ['image', 'ALTER TABLE products ADD COLUMN image MEDIUMTEXT NULL'],
+    ['badge', 'ALTER TABLE products ADD COLUMN badge VARCHAR(80) NULL'],
+    ['seller_id', 'ALTER TABLE products ADD COLUMN seller_id VARCHAR(128) NULL'],
+    ['seller_name', "ALTER TABLE products ADD COLUMN seller_name VARCHAR(150) NOT NULL DEFAULT 'Seller'"],
+    ['is_deleted', 'ALTER TABLE products ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0']
+  ]
+  for (const [field, sql] of additions) {
+    if (!existing.has(field)) {
+      await db.query(sql)
+      console.log(`Added missing products.${field} column`)
     }
-  } catch (error) {
-    console.warn('Could not check/upgrade products.image column:', error.message)
   }
+  const [imageColumn] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
+  if (imageColumn.length && !/mediumtext|longtext/i.test(String(imageColumn[0].Type))) {
+    await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
+    console.log('Products image column upgraded to MEDIUMTEXT')
+  }
+  await db.query('UPDATE products SET is_deleted = 0 WHERE is_deleted IS NULL')
 }
 
 // Protect admin-only management endpoints below this line.
 app.use('/api', requireAdmin)
 
-// ==================================================
-// PRODUCTS
-// ==================================================
-
-async function getProducts(req, res) {
-  try {
-    const [rows] = await db.query(
-      'SELECT * FROM products WHERE is_deleted = 0 ORDER BY product_id DESC'
-    )
-    res.json(rows.map(productResponse))
-  } catch (error) {
-    console.error('Load products failed:', error)
-    res.status(500).json({ message: 'Could not load products.' })
-  }
-}
-
-app.get('/api/products', getProducts)
-app.get('/api/product', getProducts)
-
-async function createProduct(req, res) {
-  try {
-    const body = req.body || {}
-    const name = String(body.name || body.product || '').trim()
-    const category = String(body.category || '').trim()
-    const image = body.img || body.image || (req.file ? `/uploads/${req.file.filename}` : '')
-
-    if (!name || !category) {
-      if (req.file) removeImageFile(req.file.filename)
-      return res.status(400).json({ message: 'Product name and category are required.' })
-    }
-
-    const [result] = await db.query(
-      'INSERT INTO products (product_name, category, material, buy_price, sell_price, stock, image, badge, seller_id, seller_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [
-        name, category, body.material || null,
-        Math.max(0, validNumber(body.buy, 0)),
-        Math.max(0, validNumber(body.price ?? body.sell, 0)),
-        Math.max(0, Math.floor(validNumber(body.stock, 0))),
-        image, body.badge || null,
-        body.sellerId || req.adminUid,
-        body.sellerName || req.adminUser.name || 'Seller'
-      ]
-    )
-
-    const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [result.insertId])
-    res.status(201).json(productResponse(rows[0]))
-  } catch (error) {
-    console.error('Create product failed:', error)
-    if (req.file) removeImageFile(req.file.filename)
-    res.status(500).json({ message: 'Could not create product.' })
-  }
-}
-
-app.post('/api/products', upload.single('image'), createProduct)
-app.post('/api/product', upload.single('image'), createProduct)
-
-async function updateProduct(req, res) {
-  try {
-    const [found] = await db.query(
-      'SELECT * FROM products WHERE product_id = ? AND is_deleted = 0 LIMIT 1',
-      [req.params.id]
-    )
-    if (!found.length) {
-      if (req.file) removeImageFile(req.file.filename)
-      return res.status(404).json({ message: 'Product not found.' })
-    }
-
-    const old = found[0]
-    const body = req.body || {}
-    const name = String(body.name ?? body.product ?? old.product_name).trim()
-    const category = String(body.category ?? old.category).trim()
-    const image = body.img ?? body.image ?? (req.file ? `/uploads/${req.file.filename}` : old.image)
-
-    await db.query(
-      'UPDATE products SET product_name = ?, category = ?, material = ?, buy_price = ?, sell_price = ?, stock = ?, image = ?, badge = ?, seller_id = ?, seller_name = ? WHERE product_id = ?',
-      [
-        name, category, body.material ?? old.material,
-        Math.max(0, validNumber(body.buy ?? old.buy_price, 0)),
-        Math.max(0, validNumber(body.price ?? body.sell ?? old.sell_price, 0)),
-        Math.max(0, Math.floor(validNumber(body.stock ?? old.stock, 0))),
-        image, body.badge === undefined ? old.badge : body.badge,
-        body.sellerId ?? old.seller_id,
-        body.sellerName ?? old.seller_name,
-        req.params.id
-      ]
-    )
-
-    if (req.file && old.image && old.image !== image) removeImageFile(old.image)
-
-    const [rows] = await db.query('SELECT * FROM products WHERE product_id = ?', [req.params.id])
-    res.json(productResponse(rows[0]))
-  } catch (error) {
-    console.error('Update product failed:', error)
-    if (req.file) removeImageFile(req.file.filename)
-    res.status(500).json({ message: 'Could not update product.' })
-  }
-}
-
-app.put('/api/products/:id', upload.single('image'), updateProduct)
-app.put('/api/product/:id', upload.single('image'), updateProduct)
-
-async function deleteProduct(req, res) {
-  try {
-    const [rows] = await db.query(
-      'SELECT image FROM products WHERE product_id = ? AND is_deleted = 0 LIMIT 1',
-      [req.params.id]
-    )
-    if (!rows.length) return res.status(404).json({ message: 'Product not found.' })
-
-    await db.query('UPDATE products SET is_deleted = 1 WHERE product_id = ?', [req.params.id])
-    removeImageFile(rows[0].image)
-    res.json({ message: 'Product deleted successfully.', id: req.params.id })
-  } catch (error) {
-    console.error('Delete product failed:', error)
-    res.status(500).json({ message: 'Could not delete product.' })
-  }
-}
-
-app.delete('/api/products/:id', deleteProduct)
-app.delete('/api/product/:id', deleteProduct)
+// Product CRUD is registered above; admin-only routes continue below.
 
 // ==================================================
 // USERS
