@@ -1,11 +1,13 @@
-CREATE DATABASE IF NOT EXISTS dells_bag_co
+-- Dell's Bag & Co local XAMPP database
+-- Import this file in phpMyAdmin to create/use randell_bagcommerce.
+-- Firebase Authentication remains the login provider; passwords are not stored here.
+
+CREATE DATABASE IF NOT EXISTS randell_bagcommerce
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE dells_bag_co;
+USE randell_bagcommerce;
 
--- Customer, seller and admin profiles.
--- Passwords are NOT stored here; Firebase Authentication remains the login provider.
 CREATE TABLE IF NOT EXISTS users (
   user_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   firebase_uid VARCHAR(128) NULL,
@@ -27,7 +29,6 @@ CREATE TABLE IF NOT EXISTS categories (
   UNIQUE KEY uq_categories_name (category_name)
 ) ENGINE=InnoDB;
 
--- Product catalog used by the Node/Express API.
 CREATE TABLE IF NOT EXISTS products (
   product_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   product_name VARCHAR(191) NOT NULL,
@@ -49,12 +50,15 @@ CREATE TABLE IF NOT EXISTS products (
   KEY idx_products_active (is_deleted)
 ) ENGINE=InnoDB;
 
--- Orders can retain the Firebase document ID while data is gradually migrated.
+-- Includes customer_* columns queried by backend/server.js.
+-- buyer_* columns are retained for compatibility with older app data.
 CREATE TABLE IF NOT EXISTS orders (
   order_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-  firebase_order_id VARCHAR(128) NULL,
-  firebase_uid VARCHAR(128) NOT NULL,
-  buyer_name VARCHAR(150) NOT NULL,
+  firebase_order_id VARCHAR(191) NULL,
+  firebase_uid VARCHAR(128) NULL,
+  customer_name VARCHAR(150) NULL,
+  customer_email VARCHAR(191) NULL,
+  buyer_name VARCHAR(150) NULL,
   buyer_address TEXT NULL,
   buyer_contact VARCHAR(40) NULL,
   payment_method VARCHAR(50) NOT NULL DEFAULT 'COD',
@@ -108,13 +112,13 @@ CREATE TABLE IF NOT EXISTS cart_items (
 CREATE TABLE IF NOT EXISTS notifications (
   notification_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   seller_id VARCHAR(128) NOT NULL,
-  order_id VARCHAR(128) NOT NULL,
+  order_id VARCHAR(191) NOT NULL,
   buyer_name VARCHAR(150) NULL,
   buyer_address TEXT NULL,
   buyer_contact VARCHAR(40) NULL,
   payment_method VARCHAR(50) NOT NULL DEFAULT 'COD',
   status VARCHAR(40) NOT NULL DEFAULT 'To Ship',
-  items_json JSON NULL,
+  items_json LONGTEXT NULL,
   placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   is_read TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
