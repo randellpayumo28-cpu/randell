@@ -189,7 +189,7 @@ app.get('/api/health', async (req, res) => {
 async function requireUser(req, res, next) {
   try {
     if (!firebaseAuth) return res.status(503).json({ message: 'Firebase Admin is not configured. Set FIREBASE_SERVICE_ACCOUNT_JSON in backend/.env.' })
-    const match = String(req.headers.authorization || '').match(/^Bearer\\s+(.+)$/i)
+    const match = String(req.headers.authorization || '').match(/^Bearer\s+(.+)$/i)
     if (!match) return res.status(401).json({ message: 'Please sign in again.' })
     const decoded = await firebaseAuth.verifyIdToken(match[1])
     const name = decoded.name || (decoded.email || 'Seller').split('@')[0]
