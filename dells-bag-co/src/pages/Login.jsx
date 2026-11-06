@@ -5,7 +5,7 @@ import {
   signInWithPopup,
 } from 'firebase/auth'
 import { auth, googleProvider } from '../firebase.js'
-import { ensureUserProfile } from '../services/userProfile.js'
+import { ensureUserProfile, getDatabaseProfile } from '../services/userProfile.js'
 
 // ==========================================
 // FIREBASE ERROR MESSAGES
@@ -55,15 +55,17 @@ function Login() {
   // ==========================================
   async function routeByRole(user) {
     const profile = await ensureUserProfile(user)
+    // MySQL is the only authority for user/seller/admin permissions.
+    const databaseProfile = await getDatabaseProfile(user)
 
-    console.log('Logged-in profile:', profile)
+    console.log('Logged-in database profile:', databaseProfile)
 
     // ADMIN
-    if (profile.role === 'admin') {
+    if (databaseProfile.role === 'admin') {
       navigate('/admin-dashboard', {
         replace: true,
         state: {
-          name: profile.fullName || profile.email || 'Admin',
+          name: profile.fullName || databaseProfile.email || 'Admin',
         },
       })
 
