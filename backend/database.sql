@@ -128,6 +128,25 @@ CREATE TABLE IF NOT EXISTS notifications (
   KEY idx_notifications_order (order_id)
 ) ENGINE=InnoDB;
 
+-- Safe upgrades for the original phpMyAdmin products table.
+-- These ALTER statements are additive and safe to run on the existing dells_bag_co_db.
+-- They do not drop tables or delete existing products/users.
+ALTER TABLE products ADD COLUMN IF NOT EXISTS material VARCHAR(150) NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image MEDIUMTEXT NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS badge VARCHAR(80) NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS seller_id VARCHAR(128) NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS seller_name VARCHAR(150) NOT NULL DEFAULT 'Seller';
+ALTER TABLE products ADD COLUMN IF NOT EXISTS is_deleted TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP;
+
+-- Keep any existing image_path values visible through the API's image field.
+UPDATE products
+SET image = image_path
+WHERE (image IS NULL OR image = '')
+  AND image_path IS NOT NULL
+  AND image_path <> '';
+
 INSERT IGNORE INTO categories (category_name) VALUES
 ('Backpack'),
 ('Handbag'),
