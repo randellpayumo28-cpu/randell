@@ -133,7 +133,7 @@ export default function SellerDashboard() {
   return <div className="bg-bags-pattern app-page">
     <header className="bg-warning-subtle bg-gradient py-4 px-3"><div className="container">
       <div className="d-flex justify-content-between align-items-center"><strong className="fs-5">My Selling Dashboard</strong>
-        <div className="d-flex gap-2"><button className="btn btn-outline-secondary btn-sm" onClick={() => navigate('/dashboard')}>Shop</button><button className="btn btn-outline-secondary btn-sm" onClick={signOutSeller}>Log out</button></div>
+        <div className="d-flex gap-2"><button className="btn btn-outline-secondary btn-sm" onClick={() => navigate('/dashboard')}>Shop</button><button className="btn btn-outline-secondary btn-sm" onClick={signOutUser}>Log out</button></div>
       </div><p className="small mt-3 mb-0">Welcome, {currentUser?.fullName || currentUser?.username || 'User'}! List and manage your own products here.</p>
     </div></header>
     <main className="container py-4">
