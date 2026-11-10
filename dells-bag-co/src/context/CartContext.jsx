@@ -37,6 +37,7 @@ export function CartProvider({ children }) {
   const { currentUser, getIdToken } = useAuth()
   const { products } = useProducts()
   const [cart, setCart] = useState(loadCart)
+  const [cartLoadedForUid, setCartLoadedForUid] = useState(null)
   const [orders, setOrders] = useState([])
   const [unseenOrdersCount, setUnseenOrdersCount] = useState(() => {
     try { return JSON.parse(localStorage.getItem(UNSEEN_ORDERS_KEY)) || 0 } catch { return 0 }
@@ -58,11 +59,49 @@ export function CartProvider({ children }) {
 
   useEffect(() => {
     let active = true
-    if (!currentUser?.uid) { setOrders([]); return () => { active = false } }
+    const uid = currentUser?.uid
+    if (!uid) {
+      setCartLoadedForUid(null)
+      setOrders([])
+      return () => { active = false }
+    }
+
+    api('/cart').then(async rows => {
+      if (!active) return
+      const savedCart = {}
+      for (const item of Array.isArray(rows) ? rows : []) {
+        savedCart[String(item.productId)] = { qty: Number(item.qty) || 1, selected: item.selected !== false }
+      }
+      if (Object.keys(savedCart).length) {
+        setCart(savedCart)
+      } else {
+        // Preserve a pre-existing guest cart when this account has no saved cart yet.
+        const localCart = loadCart()
+        if (Object.keys(localCart).length) {
+          await api('/cart', {
+            method: 'PUT',
+            body: JSON.stringify({ items: Object.entries(localCart).map(([productId, value]) => ({ productId, ...value })) }),
+          })
+        }
+      }
+      if (active) setCartLoadedForUid(uid)
+    }).catch(error => {
+      console.error('Could not load MySQL cart:', error)
+      if (active) setCartLoadedForUid(uid)
+    })
+
     api('/orders/mine').then(rows => { if (active) setOrders((Array.isArray(rows) ? rows : []).map(normalizeOrder)) })
       .catch(error => console.error('Could not load MySQL orders:', error))
     return () => { active = false }
   }, [currentUser?.uid])
+
+  useEffect(() => {
+    if (!currentUser?.uid || cartLoadedForUid !== currentUser.uid) return
+    api('/cart', {
+      method: 'PUT',
+      body: JSON.stringify({ items: Object.entries(cart).map(([productId, value]) => ({ productId, ...value })) }),
+    }).catch(error => console.error('Could not save MySQL cart:', error))
+  }, [cart, currentUser?.uid, cartLoadedForUid])
 
   function markOrdersSeen() { setUnseenOrdersCount(0) }
   function addToCart(productId) { setCart(prev => ({ ...prev, [productId]: { qty: (prev[productId]?.qty || 0) + 1, selected: prev[productId]?.selected !== false } })) }
