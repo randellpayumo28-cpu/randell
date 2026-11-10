@@ -384,6 +384,55 @@ async function ensureOrderTables() {
   await db.query("CREATE TABLE IF NOT EXISTS notifications (notification_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT, seller_id VARCHAR(128) NOT NULL, order_id VARCHAR(191) NOT NULL, buyer_name VARCHAR(150) NULL, buyer_address TEXT NULL, buyer_contact VARCHAR(40) NULL, payment_method VARCHAR(50) NOT NULL DEFAULT 'COD', status VARCHAR(40) NOT NULL DEFAULT 'To Ship', items_json LONGTEXT NULL, placed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, is_read TINYINT(1) NOT NULL DEFAULT 0, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (notification_id), UNIQUE KEY uq_notification_seller_order (seller_id, order_id), KEY idx_notifications_seller (seller_id), KEY idx_notifications_order (order_id)) ENGINE=InnoDB")
   console.log('Order and notification tables are ready')
 }
+// Signed-in cart persistence. The frontend may cache the cart locally, but MySQL is the
+// durable per-account source so carts survive browser refreshes and device changes.
+app.get('/api/cart', requireUser, async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      'SELECT product_id, quantity, selected FROM cart_items WHERE firebase_uid = ? ORDER BY cart_item_id',
+      [req.authUid]
+    )
+    res.json(rows.map(row => ({ productId: String(row.product_id), qty: Number(row.quantity), selected: Boolean(row.selected) })))
+  } catch (error) {
+    console.error('Load MySQL cart failed:', error)
+    res.status(500).json({ message: 'Could not load your saved cart.' })
+  }
+})
+
+app.put('/api/cart', requireUser, async (req, res) => {
+  let connection
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : []
+    connection = await db.getConnection()
+    await connection.beginTransaction()
+    await connection.query('DELETE FROM cart_items WHERE firebase_uid = ?', [req.authUid])
+    for (const item of items) {
+      const productId = Number(item.productId ?? item.id)
+      const quantity = Math.floor(Number(item.qty ?? item.quantity))
+      if (!Number.isSafeInteger(productId) || productId < 1 || !Number.isSafeInteger(quantity) || quantity < 1) {
+        throw new Error('A cart item has an invalid product or quantity.')
+      }
+      const [products] = await connection.query(
+        'SELECT product_id FROM products WHERE product_id = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1',
+        [productId]
+      )
+      if (!products.length) continue
+      await connection.query(
+        'INSERT INTO cart_items (firebase_uid, product_id, quantity, selected) VALUES (?, ?, ?, ?)',
+        [req.authUid, productId, quantity, item.selected === false ? 0 : 1]
+      )
+    }
+    await connection.commit()
+    res.json({ message: 'Cart saved to MySQL.', itemCount: items.length })
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {})
+    console.error('Save MySQL cart failed:', error)
+    res.status(400).json({ message: error.message || 'Could not save your cart.' })
+  } finally {
+    if (connection) connection.release()
+  }
+})
+
 // Signed-in customer order endpoints. Customers can only read/cancel their own orders.
 app.get('/api/orders/mine', requireUser, async (req, res) => {
   try {
@@ -430,10 +479,28 @@ app.post('/api/orders', requireUser, async (req, res) => {
       'INSERT INTO orders (firebase_order_id, firebase_uid, customer_name, customer_email, buyer_name, buyer_address, buyer_contact, payment_method, total, status, placed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())',
       [orderKey, req.authUid, req.authUser.name || buyer.name, req.authUser.email || null, buyer.name, buyer.address, buyer.contactNumber, body.paymentMethod || 'COD', total, 'To Ship']
     )
+    const notificationsBySeller = new Map()
     for (const item of normalized) {
       await connection.query('INSERT INTO order_items (order_id, product_id, product_name, image, unit_price, quantity, seller_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [orderResult.insertId, item.product_id, item.product_name, item.image || item.image_path || '', item.price, item.quantity, item.seller_id || null])
       await connection.query('UPDATE products SET stock = stock - ? WHERE product_id = ?', [item.quantity, item.product_id])
+      if (item.seller_id) {
+        if (!notificationsBySeller.has(item.seller_id)) notificationsBySeller.set(item.seller_id, [])
+        notificationsBySeller.get(item.seller_id).push({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          image: item.image || item.image_path || '',
+          price: item.price,
+          quantity: item.quantity
+        })
+      }
     }
+    for (const [sellerId, sellerItems] of notificationsBySeller) {
+      await connection.query(
+        'INSERT INTO notifications (seller_id, order_id, buyer_name, buyer_address, buyer_contact, payment_method, status, items_json, placed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE buyer_name = VALUES(buyer_name), buyer_address = VALUES(buyer_address), buyer_contact = VALUES(buyer_contact), payment_method = VALUES(payment_method), status = VALUES(status), items_json = VALUES(items_json)',
+        [sellerId, orderKey, buyer.name, buyer.address, buyer.contactNumber, body.paymentMethod || 'COD', 'To Ship', JSON.stringify(sellerItems)]
+      )
+    }
+    await connection.query('DELETE FROM cart_items WHERE firebase_uid = ?', [req.authUid])
     await connection.commit()
     const [rows] = await db.query('SELECT * FROM orders WHERE order_id = ?', [orderResult.insertId])
     const [savedItems] = await db.query('SELECT order_item_id, product_id, product_name AS name, image AS img, unit_price AS price, quantity AS qty, seller_id FROM order_items WHERE order_id = ?', [orderResult.insertId])
@@ -464,6 +531,7 @@ app.patch('/api/orders/:id/cancel', requireUser, async (req, res) => {
     const [items] = await connection.query('SELECT product_id, quantity FROM order_items WHERE order_id = ?', [orders[0].order_id])
     for (const item of items) if (item.product_id) await connection.query('UPDATE products SET stock = stock + ? WHERE product_id = ?', [item.quantity, item.product_id])
     await connection.query("UPDATE orders SET status = 'Cancelled', cancel_reason = ? WHERE order_id = ?", [String(req.body?.reason || '').slice(0, 2000), orders[0].order_id])
+    await connection.query("UPDATE notifications SET status = 'Cancelled' WHERE order_id = ?", [orders[0].firebase_order_id || String(orders[0].order_id)])
     await connection.commit()
     res.json({ message: 'Order cancelled and stock restored.' })
   } catch (error) {
@@ -623,6 +691,7 @@ app.patch('/api/orders/:id', async (req, res) => {
     }
 
     await connection.query('UPDATE orders SET status = ? WHERE order_id = ?', [status, order.order_id])
+    await connection.query('UPDATE notifications SET status = ? WHERE order_id = ?', [status, order.firebase_order_id || String(order.order_id)])
     await connection.commit()
 
     const [rows] = await db.query('SELECT * FROM orders WHERE order_id = ? LIMIT 1', [order.order_id])
