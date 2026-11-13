@@ -362,6 +362,27 @@ async function ensureProductImageColumn() {
   if (existing.has('image_path')) {
     await db.query("UPDATE products SET image = image_path WHERE (image IS NULL OR image = '') AND image_path IS NOT NULL AND image_path <> ''")
   }
+
+  // Give the four original catalog bags a durable image in MySQL when their
+  // image fields are empty. Existing manually uploaded/custom images are kept.
+  await db.query(`
+    UPDATE products
+    SET image = CASE
+      WHEN LOWER(product_name) LIKE '%urban sling%' THEN 'https://images.unsplash.com/photo-1548036328-c9fa89d128fa?w=900&q=85'
+      WHEN LOWER(product_name) LIKE '%field tote%' THEN 'https://images.unsplash.com/photo-1591561954557-26941169b49e?w=900&q=85'
+      WHEN LOWER(product_name) LIKE '%rover backpack%' THEN 'https://images.unsplash.com/photo-1547949003-9792a18a2601?w=900&q=85'
+      WHEN LOWER(product_name) LIKE '%classic backpack%' THEN 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=900&q=85'
+      ELSE image
+    END
+    WHERE (image IS NULL OR image = '')
+      AND (image_path IS NULL OR image_path = '')
+      AND (
+        LOWER(product_name) LIKE '%urban sling%'
+        OR LOWER(product_name) LIKE '%field tote%'
+        OR LOWER(product_name) LIKE '%rover backpack%'
+        OR LOWER(product_name) LIKE '%classic backpack%'
+      )
+  `)
   const [imageColumn] = await db.query("SHOW COLUMNS FROM products LIKE 'image'")
   if (imageColumn.length && !/mediumtext|longtext/i.test(String(imageColumn[0].Type))) {
     await db.query('ALTER TABLE products MODIFY image MEDIUMTEXT NULL')
