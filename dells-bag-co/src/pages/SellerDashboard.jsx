@@ -17,7 +17,7 @@ function normalize(p) {
     buy: Number(p.buy ?? p.buy_price ?? 0),
     sell: Number(p.sell ?? p.sell_price ?? p.price ?? 0),
     price: Number(p.price ?? p.sell_price ?? p.sell ?? 0),
-    image: p.image || p.img || '',
+    image: p.image || p.img || p.image_path || '',
     stock: Number(p.stock || 0),
   }
 }
