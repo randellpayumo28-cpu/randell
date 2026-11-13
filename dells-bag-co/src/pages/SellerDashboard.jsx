@@ -17,7 +17,7 @@ function normalize(p) {
     buy: Number(p.buy ?? p.buy_price ?? 0),
     sell: Number(p.sell ?? p.sell_price ?? p.price ?? 0),
     price: Number(p.price ?? p.sell_price ?? p.sell ?? 0),
-    image: p.image || p.img || '',
+    image: p.image || p.img || p.image_path || '',
     stock: Number(p.stock || 0),
   }
 }
@@ -128,13 +128,13 @@ export default function SellerDashboard() {
     } finally { setSaving(false) }
   }
 
-  async function signOutSeller() { await logout(); navigate('/') }
+  async function signOutUser() { await logout(); navigate('/') }
 
   return <div className="bg-bags-pattern app-page">
     <header className="bg-warning-subtle bg-gradient py-4 px-3"><div className="container">
-      <div className="d-flex justify-content-between align-items-center"><strong className="fs-5">Seller Dashboard</strong>
-        <div className="d-flex gap-2"><button className="btn btn-outline-secondary btn-sm" onClick={() => navigate('/dashboard')}>Shop</button><button className="btn btn-outline-secondary btn-sm" onClick={signOutSeller}>Log out</button></div>
-      </div><p className="small mt-3 mb-0">Welcome, {currentUser?.fullName || currentUser?.username || 'Seller'}! Manage your bag inventory here.</p>
+      <div className="d-flex justify-content-between align-items-center"><strong className="fs-5">My Selling Dashboard</strong>
+        <div className="d-flex gap-2"><button className="btn btn-outline-secondary btn-sm" onClick={() => navigate('/dashboard')}>Shop</button><button className="btn btn-outline-secondary btn-sm" onClick={signOutUser}>Log out</button></div>
+      </div><p className="small mt-3 mb-0">Welcome, {currentUser?.fullName || currentUser?.username || 'User'}! List and manage your own products here.</p>
     </div></header>
     <main className="container py-4">
       {error && <div className="alert alert-danger">{error}</div>}{notice && <div className="alert alert-success">{notice}</div>}
@@ -142,7 +142,7 @@ export default function SellerDashboard() {
         {[['Products', items.length], ['Total stock', totalStock], ['Stock value', peso(totalValue)]].map(([label, value]) => <div className="col-md-4" key={label}><div className="card border-0 shadow-sm"><div className="card-body p-4"><div className="text-uppercase small text-muted">{label}</div><h2 className="display-6 fw-bold mb-0">{value}</h2></div></div></div>)}
       </div>
       <section className="card border-0 shadow-sm"><div className="card-body p-4">
-        <div className="d-flex justify-content-between align-items-center mb-3"><div><h2 className="h5 mb-1">My bags</h2><p className="small text-muted mb-0">Products are saved in your local XAMPP MySQL database.</p></div><button className="btn btn-dark btn-sm" onClick={() => { setEditing(null); setForm(blank); setModal('add'); setError('') }}>+ Add Product</button></div>
+        <div className="d-flex justify-content-between align-items-center mb-3"><div><h2 className="h5 mb-1">My bags</h2><p className="small text-muted mb-0">Your listings are saved in MySQL and appear immediately in the User Shop.</p></div><button className="btn btn-dark btn-sm" onClick={() => { setEditing(null); setForm(blank); setModal('add'); setError('') }}>+ Add Product</button></div>
         <div className="table-responsive"><table className="table table-hover align-middle"><thead><tr><th>ID</th><th>Image</th><th>Product</th><th>Category</th><th>Buy</th><th>Sell</th><th>Stock</th><th>Actions</th></tr></thead><tbody>
           {loading ? <tr><td colSpan="8" className="text-center py-4">Loading MySQL products...</td></tr> : items.length ? items.map(p => <tr key={p.id}><td>{p.id.slice(0, 8)}</td><td>{p.image ? <img src={p.image} alt={p.product} style={{ width: 48, height: 48, objectFit: 'cover' }} /> : '—'}</td><td>{p.product}</td><td>{p.category}</td><td>{peso(p.buy)}</td><td>{peso(p.sell)}</td><td>{p.stock}</td><td><button className="btn btn-sm btn-outline-primary me-1" onClick={() => startEdit(p)}>Edit</button><button className="btn btn-sm btn-outline-danger" onClick={() => { setDeleteTarget(p); setModal('delete'); setError('') }}>Delete</button></td></tr>) : <tr><td colSpan="8" className="text-center py-4">No products yet. Tap Add Product to start.</td></tr>}
         </tbody></table></div>

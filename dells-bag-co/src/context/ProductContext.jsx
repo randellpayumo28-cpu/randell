@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { PRODUCTS as FALLBACK_PRODUCTS } from '../data/products.js'
 
 const ProductContext = createContext(null)
@@ -16,8 +16,9 @@ function normalizeProduct(product) {
     sell: Number(product.sell ?? product.sell_price ?? product.price ?? 0),
     buy: Number(product.buy ?? product.buy_price ?? 0),
     stock: Number(product.stock || 0),
-    img: product.img || product.image || '',
-    image: product.image || product.img || '',
+    // MySQL is the source of truth; accept either stored image field.
+    img: product.img || product.image || product.image_path || '',
+    image: product.image || product.img || product.image_path || '',
     sellerId: product.sellerId || product.seller_id || null,
     sellerName: product.sellerName || product.seller_name || 'Seller',
   }
@@ -26,6 +27,7 @@ function normalizeProduct(product) {
 export function ProductProvider({ children }) {
   const [products, setProducts] = useState(FALLBACK_PRODUCTS)
   const [productsReady, setProductsReady] = useState(false)
+  const hasLoadedProducts = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -34,11 +36,14 @@ export function ProductProvider({ children }) {
         const response = await fetch(`${API_BASE}/products`)
         if (!response.ok) throw new Error(`Products API returned ${response.status}`)
         const rows = await response.json()
-        if (active) setProducts(Array.isArray(rows) ? rows.map(normalizeProduct) : [])
+        if (active) {
+          setProducts(Array.isArray(rows) ? rows.map(normalizeProduct) : [])
+          hasLoadedProducts.current = true
+        }
       } catch (error) {
         console.error('Could not load products from XAMPP MySQL API:', error)
         // Keep the existing storefront usable if the local API is temporarily offline.
-        if (active && !productsReady) setProducts(FALLBACK_PRODUCTS)
+        if (active && !hasLoadedProducts.current) setProducts(FALLBACK_PRODUCTS)
       } finally {
         if (active) setProductsReady(true)
       }
