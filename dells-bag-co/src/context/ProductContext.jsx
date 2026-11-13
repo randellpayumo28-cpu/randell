@@ -16,8 +16,9 @@ function normalizeProduct(product) {
     sell: Number(product.sell ?? product.sell_price ?? product.price ?? 0),
     buy: Number(product.buy ?? product.buy_price ?? 0),
     stock: Number(product.stock || 0),
-    img: product.img || product.image || '',
-    image: product.image || product.img || '',
+    // MySQL is the source of truth; accept either stored image field.
+    img: product.img || product.image || product.image_path || '',
+    image: product.image || product.img || product.image_path || '',
     sellerId: product.sellerId || product.seller_id || null,
     sellerName: product.sellerName || product.seller_name || 'Seller',
   }
