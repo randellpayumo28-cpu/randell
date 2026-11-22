@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { PRODUCTS as FALLBACK_PRODUCTS } from '../data/products.js'
 
 const ProductContext = createContext(null)
-const API_BASE = '/api'
+const API_BASE = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
 function normalizeProduct(product) {
   return {
@@ -41,7 +41,7 @@ export function ProductProvider({ children }) {
           hasLoadedProducts.current = true
         }
       } catch (error) {
-        console.error('Could not load products from XAMPP MySQL API:', error)
+        console.error('Could not load products from API:', error)
         // Keep the existing storefront usable if the local API is temporarily offline.
         if (active && !hasLoadedProducts.current) setProducts(FALLBACK_PRODUCTS)
       } finally {

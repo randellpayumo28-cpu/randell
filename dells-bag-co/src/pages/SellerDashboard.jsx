@@ -6,7 +6,7 @@ import { fileToCompressedDataUrl } from '../services/imageUpload.js'
 const categories = ['Backpack', 'Handbag', 'Tote Bag', 'Sling Bag', 'Travel Bag', 'Wallet']
 const blank = { product: '', category: 'Backpack', buy: '', sell: '', stock: '', image: null, currentImage: '' }
 const peso = (n) => '₱' + Number(n || 0).toFixed(2)
-const API = '/api'
+const API = (import.meta.env.VITE_API_URL || '/api').replace(/\/+$/, '')
 
 function normalize(p) {
   return {
@@ -63,7 +63,7 @@ export default function SellerDashboard() {
       setError('')
     } catch (e) {
       console.error('Load seller products failed:', e)
-      setError(e.message || 'Could not load products from XAMPP MySQL.')
+      setError(e.message || 'Could not load products from the API.')
     } finally {
       setLoading(false)
     }
