@@ -26,17 +26,47 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }))
 
-// ---------- MySQL connection (XAMPP) ----------
+// ---------- Database connection (local XAMPP or online TiDB) ----------
+// Local development remains the default. On Render, set DB_TARGET=tidb
+// and provide the TIDB_* environment variables in the Render dashboard.
+
+const dbTarget = String(process.env.DB_TARGET || 'local').trim().toLowerCase()
+const useTiDB = ['tidb', 'online'].includes(dbTarget)
+
+if (!useTiDB && !['local', 'xampp'].includes(dbTarget)) {
+  throw new Error('Invalid DB_TARGET. Use "local" or "tidb".')
+}
+
+const dbConfig = useTiDB
+  ? {
+      host: process.env.TIDB_HOST || process.env.DB_HOST,
+      port: Number(process.env.TIDB_PORT || process.env.DB_PORT || 4000),
+      user: process.env.TIDB_USER || process.env.DB_USER,
+      password: process.env.TIDB_PASSWORD ?? process.env.DB_PASSWORD ?? '',
+      database: process.env.TIDB_DATABASE || process.env.DB_NAME || 'dells_bag_co_db',
+      // TiDB Cloud public connections require TLS. Keep certificate verification enabled.
+      ssl: { minVersion: 'TLSv1.2' }
+    }
+  : {
+      host: process.env.LOCAL_DB_HOST || process.env.DB_HOST || '127.0.0.1',
+      port: Number(process.env.LOCAL_DB_PORT || process.env.DB_PORT || 3306),
+      user: process.env.LOCAL_DB_USER || process.env.DB_USER || 'root',
+      password: process.env.LOCAL_DB_PASSWORD ?? process.env.DB_PASSWORD ?? '',
+      database: process.env.LOCAL_DB_NAME || process.env.DB_NAME || 'dells_bag_co_db'
+    }
+
+if (useTiDB && (!dbConfig.host || !dbConfig.user || !dbConfig.password)) {
+  throw new Error('TiDB configuration is incomplete. Set TIDB_HOST, TIDB_USER, and TIDB_PASSWORD.')
+}
+
+console.log(`Database target: ${useTiDB ? 'TiDB Cloud' : 'Local XAMPP'}`)
 
 const db = mysql.createPool({
-  host: process.env.DB_HOST || '127.0.0.1',
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'dells_bag_co_db',
+  ...dbConfig,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  connectTimeout: 15000
 })
 
 // ---------- Firebase Admin initialization ----------
@@ -798,7 +828,7 @@ async function startServer() {
     const readyConnection = await db.getConnection()
     readyConnection.release()
 
-    app.listen(PORT, () => {
+    app.listen(PORT, '0.0.0.0', () => {
       console.log(`Server running on port ${PORT}`)
     })
   } catch (error) {
