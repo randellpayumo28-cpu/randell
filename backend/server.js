@@ -26,17 +26,47 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }))
 
-// ---------- MySQL connection (XAMPP) ----------
+// ---------- Database connection (local XAMPP or online TiDB) ----------
+// Local development remains the default. On Render, set DB_TARGET=tidb
+// and provide the TIDB_* environment variables in the Render dashboard.
+
+const dbTarget = String(process.env.DB_TARGET || 'local').trim().toLowerCase()
+const useTiDB = ['tidb', 'online'].includes(dbTarget)
+
+if (!useTiDB && !['local', 'xampp'].includes(dbTarget)) {
+  throw new Error('Invalid DB_TARGET. Use "local" or "tidb".')
+}
+
+const dbConfig = useTiDB
+  ? {
+      host: process.env.TIDB_HOST || process.env.DB_HOST,
+      port: Number(process.env.TIDB_PORT || process.env.DB_PORT || 4000),
+      user: process.env.TIDB_USER || process.env.DB_USER,
+      password: process.env.TIDB_PASSWORD ?? process.env.DB_PASSWORD ?? '',
+      database: process.env.TIDB_DATABASE || process.env.DB_NAME || 'dells_bag_co_db',
+      // TiDB Cloud public connections require TLS. Keep certificate verification enabled.
+      ssl: { minVersion: 'TLSv1.2' }
+    }
+  : {
+      host: process.env.LOCAL_DB_HOST || process.env.DB_HOST || '127.0.0.1',
+      port: Number(process.env.LOCAL_DB_PORT || process.env.DB_PORT || 3306),
+      user: process.env.LOCAL_DB_USER || process.env.DB_USER || 'root',
+      password: process.env.LOCAL_DB_PASSWORD ?? process.env.DB_PASSWORD ?? '',
+      database: process.env.LOCAL_DB_NAME || process.env.DB_NAME || 'dells_bag_co_db'
+    }
+
+if (useTiDB && (!dbConfig.host || !dbConfig.user || !dbConfig.password)) {
+  throw new Error('TiDB configuration is incomplete. Set TIDB_HOST, TIDB_USER, and TIDB_PASSWORD.')
+}
+
+console.log(`Database target: ${useTiDB ? 'TiDB Cloud' : 'Local XAMPP'}`)
 
 const db = mysql.createPool({
-  host: process.env.DB_HOST || '127.0.0.1',
-  port: Number(process.env.DB_PORT || 3306),
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'dells_bag_co_db',
+  ...dbConfig,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  connectTimeout: 15000
 })
 
 // ---------- Firebase Admin initialization ----------
@@ -320,6 +350,7 @@ async function ensureUserCompatibility() {
   const [columns] = await db.query('SHOW COLUMNS FROM users')
   const existing = new Set(columns.map(column => column.Field))
   const additions = [
+    ['name', 'ALTER TABLE users ADD COLUMN name VARCHAR(150) NULL'],
     ['username', 'ALTER TABLE users ADD COLUMN username VARCHAR(100) NULL'],
     ['photo_url', 'ALTER TABLE users ADD COLUMN photo_url TEXT NULL'],
     ['phone', 'ALTER TABLE users ADD COLUMN phone VARCHAR(40) NULL'],
@@ -328,6 +359,16 @@ async function ensureUserCompatibility() {
   for (const [field, sql] of additions) if (!existing.has(field)) {
     await db.query(sql)
     console.log('Added missing users.' + field + ' column')
+  }
+
+  // Preserve profile data created by the earlier schema naming convention.
+  const [userColumns] = await db.query('SHOW COLUMNS FROM users')
+  const userFields = new Set(userColumns.map(column => column.Field))
+  if (userFields.has('full_name')) {
+    await db.query("UPDATE users SET name = full_name WHERE (name IS NULL OR name = '') AND full_name IS NOT NULL AND full_name <> ''")
+  }
+  if (userFields.has('profile_image')) {
+    await db.query("UPDATE users SET photo_url = profile_image WHERE (photo_url IS NULL OR photo_url = '') AND profile_image IS NOT NULL AND profile_image <> ''")
   }
 
   // Keep the role model limited to user/admin; normalize any legacy seller value.
@@ -786,25 +827,25 @@ app.use((err, req, res, next) => {
 
 // ---------- Start server ----------
 
-async function startServer() {
+async function initializeDatabase() {
   try {
     const connection = await db.getConnection()
-    console.log('Database Connected')
     connection.release()
+    console.log('Database Connected')
     await ensureUserCompatibility()
     await ensureProductImageColumn()
     await ensureCategoryTable()
     await ensureOrderTables()
-    const readyConnection = await db.getConnection()
-    readyConnection.release()
-
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`)
-    })
+    console.log('Database schema checks completed')
   } catch (error) {
-    console.error('Database Connection Failed:', error.message)
-    process.exit(1)
+    console.error('Database initialization failed; API will remain online and retry:', error.message)
+    setTimeout(initializeDatabase, 10000)
   }
 }
 
-startServer()
+// Bind the HTTP port immediately so Render can detect the service as live.
+// Database initialization runs after listen and retries if TiDB/XAMPP is temporarily unavailable.
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`)
+  initializeDatabase()
+})
