@@ -350,6 +350,7 @@ async function ensureUserCompatibility() {
   const [columns] = await db.query('SHOW COLUMNS FROM users')
   const existing = new Set(columns.map(column => column.Field))
   const additions = [
+    ['name', 'ALTER TABLE users ADD COLUMN name VARCHAR(150) NULL'],
     ['username', 'ALTER TABLE users ADD COLUMN username VARCHAR(100) NULL'],
     ['photo_url', 'ALTER TABLE users ADD COLUMN photo_url TEXT NULL'],
     ['phone', 'ALTER TABLE users ADD COLUMN phone VARCHAR(40) NULL'],
@@ -358,6 +359,16 @@ async function ensureUserCompatibility() {
   for (const [field, sql] of additions) if (!existing.has(field)) {
     await db.query(sql)
     console.log('Added missing users.' + field + ' column')
+  }
+
+  // Preserve profile data created by the earlier schema naming convention.
+  const [userColumns] = await db.query('SHOW COLUMNS FROM users')
+  const userFields = new Set(userColumns.map(column => column.Field))
+  if (userFields.has('full_name')) {
+    await db.query("UPDATE users SET name = full_name WHERE (name IS NULL OR name = '') AND full_name IS NOT NULL AND full_name <> ''")
+  }
+  if (userFields.has('profile_image')) {
+    await db.query("UPDATE users SET photo_url = profile_image WHERE (photo_url IS NULL OR photo_url = '') AND profile_image IS NOT NULL AND profile_image <> ''")
   }
 
   // Keep the role model limited to user/admin; normalize any legacy seller value.
@@ -816,25 +827,25 @@ app.use((err, req, res, next) => {
 
 // ---------- Start server ----------
 
-async function startServer() {
+async function initializeDatabase() {
   try {
     const connection = await db.getConnection()
-    console.log('Database Connected')
     connection.release()
+    console.log('Database Connected')
     await ensureUserCompatibility()
     await ensureProductImageColumn()
     await ensureCategoryTable()
     await ensureOrderTables()
-    const readyConnection = await db.getConnection()
-    readyConnection.release()
-
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server running on port ${PORT}`)
-    })
+    console.log('Database schema checks completed')
   } catch (error) {
-    console.error('Database Connection Failed:', error.message)
-    process.exit(1)
+    console.error('Database initialization failed; API will remain online and retry:', error.message)
+    setTimeout(initializeDatabase, 10000)
   }
 }
 
-startServer()
+// Bind the HTTP port immediately so Render can detect the service as live.
+// Database initialization runs after listen and retries if TiDB/XAMPP is temporarily unavailable.
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`)
+  initializeDatabase()
+})
