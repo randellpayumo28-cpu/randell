@@ -25,7 +25,7 @@ function Signup() {
     setError('')
     setLoading(true)
 
-    // Creates the Firebase Auth account AND the users/{uid} document, so the
+    // Creates the Firebase Auth account AND the MySQL account profile, so the
     // details show up on the Me page right after signing up.
     const result = await signup({ fullName, email, username, password })
     setLoading(false)

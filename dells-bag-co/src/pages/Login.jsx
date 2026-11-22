@@ -55,7 +55,7 @@ function Login() {
   // ==========================================
   async function routeByRole(user) {
     const profile = await ensureUserProfile(user)
-    // MySQL is the only authority for user/seller/admin permissions.
+    // MySQL is the only authority for user/admin permissions.
     const databaseProfile = await getDatabaseProfile(user)
 
     console.log('Logged-in database profile:', databaseProfile)

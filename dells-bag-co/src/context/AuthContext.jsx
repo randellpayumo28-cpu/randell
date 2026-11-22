@@ -36,7 +36,7 @@ function loadSession() {
 }
 
 export function AuthProvider({ children }) {
-  // Existing Firestore profile
+  // User profile is loaded from MySQL.
   const [currentUser, setCurrentUser] = useState(loadSession)
 
   // NEW: Actual Firebase Authentication user
@@ -81,7 +81,7 @@ export function AuthProvider({ children }) {
 
       } catch (err) {
         console.error(
-          'Could not load Firestore profile',
+          'Could not load MySQL profile',
           err
         )
 

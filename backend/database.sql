@@ -13,13 +13,21 @@ CREATE TABLE IF NOT EXISTS users (
   firebase_uid VARCHAR(128) NULL,
   name VARCHAR(150) NOT NULL,
   email VARCHAR(191) NULL,
-  role ENUM('user', 'seller', 'admin') NOT NULL DEFAULT 'user',
+  role ENUM('user', 'admin') NOT NULL DEFAULT 'user',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id),
   UNIQUE KEY uq_users_firebase_uid (firebase_uid),
   UNIQUE KEY uq_users_email (email)
 ) ENGINE=InnoDB;
+
+-- Normalize any legacy seller accounts into regular user accounts; keep all account data.
+UPDATE users SET role = 'user' WHERE role = 'seller';
+ALTER TABLE users MODIFY role ENUM('user', 'admin') NOT NULL DEFAULT 'user';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(100) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(40) NULL;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS address TEXT NULL;
 
 CREATE TABLE IF NOT EXISTS categories (
   category_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -37,7 +45,8 @@ CREATE TABLE IF NOT EXISTS products (
   buy_price DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   sell_price DECIMAL(12,2) NOT NULL DEFAULT 0.00,
   stock INT UNSIGNED NOT NULL DEFAULT 0,
-  image TEXT NULL,
+  image MEDIUMTEXT NULL,
+  image_path VARCHAR(255) NULL,
   badge VARCHAR(80) NULL,
   seller_id VARCHAR(128) NULL,
   seller_name VARCHAR(150) NOT NULL DEFAULT 'Seller',
@@ -97,7 +106,7 @@ CREATE TABLE IF NOT EXISTS order_items (
 CREATE TABLE IF NOT EXISTS cart_items (
   cart_item_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   firebase_uid VARCHAR(128) NOT NULL,
-  product_id BIGINT UNSIGNED NOT NULL,
+  product_id INT(11) NOT NULL,
   quantity INT UNSIGNED NOT NULL DEFAULT 1,
   selected TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -133,6 +142,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 -- They do not drop tables or delete existing products/users.
 ALTER TABLE products ADD COLUMN IF NOT EXISTS material VARCHAR(150) NULL;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS image MEDIUMTEXT NULL;
+ALTER TABLE products MODIFY image MEDIUMTEXT NULL;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS image_path VARCHAR(255) NULL;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS badge VARCHAR(80) NULL;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS seller_id VARCHAR(128) NULL;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS seller_name VARCHAR(150) NOT NULL DEFAULT 'Seller';

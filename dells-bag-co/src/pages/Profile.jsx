@@ -14,7 +14,7 @@ function Profile() {
   const [error, setError] = useState('')
   const navigate = useNavigate()
 
-  // Whatever account signed in, its users/{uid} document lands here.
+  // Profile information is loaded from the signed-in account in MySQL.
   useEffect(() => {
     if (currentUser) {
       setFullName(currentUser.fullName || '')
@@ -101,7 +101,7 @@ function Profile() {
             type="email"
             className="form-control mb-3"
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            readOnly
             placeholder="you@example.com"
           />
 
